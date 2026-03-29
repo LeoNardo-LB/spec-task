@@ -1,0 +1,15 @@
+# Tests
+test/
+
+# Dependencies
+node_modules/
+
+# Dev
+tsconfig.json
+vitest.config.ts
+
+# Runtime artifacts (only top-level spec-task dir, not skills/spec-task)
+memory/
+/spec-task/
+*.log
+*.tmp
