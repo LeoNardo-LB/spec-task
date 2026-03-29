@@ -1,6 +1,6 @@
 ---
 name: spec-task
-description: "结构化任务管理与生命周期强制执行。以下场景必须使用：(1) 任何被 coordinator 通过 sessions_spawn 派发的任务 (2) 可拆解步骤≥3 的复杂任务 (3) 工作区已存在 spec-task/ 目录时的后续任务 (4) 用户显式要求使用 spec-task (5) prependContext 明确提醒时。跳过 spec-task 会导致验收失败。"
+description: "结构化任务管理与生命周期强制执行。以下场景必须使用：(1) 任何被 coordinator 通过 sessions_spawn 派发的任务 (2) prependContext 要求启动时（基于任务拆分叶子节点数与介入阈值对比）(3) 工作区已存在 spec-task/ 目录且检测到未完成任务时 (4) 用户显式要求使用 spec-task。跳过 spec-task 会导致验收失败。"
 metadata: {}
 ---
 
@@ -13,6 +13,21 @@ metadata: {}
 3. 四文档必须按拓扑序在 `running` 之前完成：`brief → spec → plan → checklist`。
 4. 没有 checklist 的执行 = 不可追溯 = 验收失败。
 5. 验收时所有 criteria 通过且任务为 running，自动转为 completed。
+
+## 介入程度
+
+spec-task 的介入程度由 `interventionLevel` 配置控制（默认：high）：
+
+| 级别 | 阈值 | 含义 |
+|------|------|------|
+| low | ≥ 20 步 | 仅大型任务触发 |
+| medium | ≥ 10 步 | 中型及以上任务触发 |
+| high | ≥ 3 步 | 小型及以上任务触发（默认） |
+| always | 无条件 | 每次都触发 |
+
+判断方式：将任务拆分为 X.Y.Z 编号，统计叶子节点数与阈值对比。
+此评估由 `before_prompt_build` hook 在 prependContext 中引导 LLM 完成。
+`enforceOnSubAgents: false` 可完全关闭 hook（优先级最高）。
 
 ## 工作流程（8步）
 

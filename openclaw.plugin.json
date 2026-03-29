@@ -12,6 +12,12 @@
         "type": "boolean",
         "description": "Whether to inject spec-task reminders for sub-agents (default: true)",
         "default": true
+      },
+      "interventionLevel": {
+        "type": "string",
+        "enum": ["low", "medium", "high", "always"],
+        "description": "Controls when spec-task intervenes in agent workflow. Based on task decomposition leaf-node count. low=≥20, medium=≥10, high=≥3, always=unconditional. Default: high.",
+        "default": "high"
       }
     }
   }

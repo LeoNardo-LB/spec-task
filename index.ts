@@ -44,7 +44,10 @@ export default definePluginEntry({
   register(api) {
     // ── Hook 注册 ───────────────────────────────────────────
     const detector = new Detector();
-    const pluginConfig = (api.pluginConfig ?? api.config ?? {}) as { enforceOnSubAgents?: boolean };
+    const pluginConfig = (api.pluginConfig ?? api.config ?? {}) as {
+      enforceOnSubAgents?: boolean;
+      interventionLevel?: "low" | "medium" | "high" | "always";
+    };
 
     // 闭包 Map：存储 agentId/sessionKey → workspaceDir 映射
     // PluginHookToolContext（before_tool_call）没有 workspaceDir 字段，

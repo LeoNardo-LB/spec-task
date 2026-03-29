@@ -29,10 +29,11 @@ describe("createPromptBuildHandler", () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
     const result = await handler({ cwd: tmpDir });
-    // L1 none → 自动创建 spec-task/config.yaml + 注入初始化提醒
+    // L1 none → 自动创建 spec-task/config.yaml + 注入介入评估提示词（默认 high 级别）
     expect(result).toHaveProperty("prependContext");
-    expect((result as any).prependContext).toContain("spec-task");
-    expect((result as any).prependContext).toContain("强制要求");
+    expect((result as any).prependContext).toContain("X.Y.Z");
+    expect((result as any).prependContext).toContain("high");
+    expect((result as any).prependContext).toContain("3 步");
     // 验证目录和 config.yaml 已创建
     expect(existsSync(join(tmpDir, "spec-task", "config.yaml"))).toBe(true);
   });
@@ -44,9 +45,11 @@ describe("createPromptBuildHandler", () => {
     const handler = createPromptBuildHandler(mockLogger, detector, {});
     const result = await handler({ cwd: tmpDir });
 
+    // L2 empty → 默认 high 级别，返回介入评估提示词
     expect(result).toHaveProperty("prependContext");
-    expect((result as any).prependContext).toContain("spec-task");
-    expect((result as any).prependContext).toContain("强制要求");
+    expect((result as any).prependContext).toContain("X.Y.Z");
+    expect((result as any).prependContext).toContain("high");
+    expect((result as any).prependContext).toContain("3 步");
   });
 
   it("should return skeleton warning for L3 (missing artifacts)", async () => {
@@ -188,5 +191,153 @@ describe("createPromptBuildHandler", () => {
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("task-a");
     expect(ctx).toContain("task-b");
+  });
+});
+
+describe("intervention levels", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), "hook-il-test-"));
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  // --- always 级别：保持现有行为 ---
+
+  it("always + L1 (none) → INIT_REMINDER (backward compatible)", async () => {
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "always" });
+    const result = await handler({ cwd: tmpDir });
+
+    expect((result as any).prependContext).toContain("强制要求");
+    expect((result as any).prependContext).not.toContain("叶子节点");
+  });
+
+  it("always + L2 (empty) → LIGHT_REMINDER (backward compatible)", async () => {
+    mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "always" });
+    const result = await handler({ cwd: tmpDir });
+
+    expect((result as any).prependContext).toContain("强制要求");
+    expect((result as any).prependContext).not.toContain("叶子节点");
+  });
+
+  // --- high 级别 ---
+
+  it("high + L1 (none) → intervention prompt with threshold 3", async () => {
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "high" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("high");
+    expect(ctx).toContain("3 步");
+    expect(ctx).toContain("叶子节点");
+    expect(ctx).toContain("X.Y.Z");
+    // 确保自动初始化仍然执行
+    expect(existsSync(join(tmpDir, "spec-task", "config.yaml"))).toBe(true);
+  });
+
+  it("high + L2 (empty) → intervention prompt with threshold 3", async () => {
+    mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "high" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("high");
+    expect(ctx).toContain("3 步");
+    expect(ctx).toContain("叶子节点");
+  });
+
+  // --- medium 级别 ---
+
+  it("medium + L1 (none) → intervention prompt with threshold 10", async () => {
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "medium" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("medium");
+    expect(ctx).toContain("10 步");
+  });
+
+  it("medium + L2 (empty) → intervention prompt with threshold 10", async () => {
+    mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "medium" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("medium");
+    expect(ctx).toContain("10 步");
+  });
+
+  // --- low 级别 ---
+
+  it("low + L1 (none) → intervention prompt with threshold 20", async () => {
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "low" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("low");
+    expect(ctx).toContain("20 步");
+  });
+
+  it("low + L2 (empty) → intervention prompt with threshold 20", async () => {
+    mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "low" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("low");
+    expect(ctx).toContain("20 步");
+  });
+
+  // --- 边界条件 ---
+
+  it("intervention level does NOT affect L3 (skeleton) → skeleton warning unchanged", async () => {
+    const taskDir = join(tmpDir, "spec-task", "task-1");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "status.yaml"), YAML.stringify({ task_id: "task-1", status: "pending" }), "utf-8");
+
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "high" });
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("SPEC-TASK");
+    expect(ctx).toContain("task-1");
+    expect(ctx).not.toContain("叶子节点"); // L3 不受 interventionLevel 影响
+  });
+
+  it("enforceOnSubAgents=false overrides any interventionLevel", async () => {
+    mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(
+      mockLogger, detector,
+      { enforceOnSubAgents: false, interventionLevel: "low" }
+    );
+    const result = await handler({ cwd: tmpDir });
+
+    expect(result).toEqual({});
+  });
+
+  it("undefined interventionLevel defaults to high", async () => {
+    mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, {}); // no interventionLevel
+    const result = await handler({ cwd: tmpDir });
+
+    const ctx = (result as any).prependContext;
+    expect(ctx).toContain("high");
+    expect(ctx).toContain("3 步");
   });
 });
