@@ -5,6 +5,7 @@ package-lock.json
 # Build artifacts
 dist/
 *.tsbuildinfo
+*.tgz
 
 # IDE
 .vscode/
