@@ -2,32 +2,44 @@
  * E2E: Agent Workspace 隔离测试
  * 验证当 OpenClaw 为每个 agent 配置独立 workspace 时，
  * spec-task 插件天然实现 agent 级任务隔离。
+ *
+ * 使用临时目录模拟 agent workspace 结构，不依赖外部环境。
  */
-import { describe, it, expect, afterEach } from "vitest";
-import { mkdirSync, rmSync, existsSync, readdirSync, writeFileSync } from "fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdirSync, rmSync, existsSync, writeFileSync, mkdtempSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
 import { FileUtils } from "../../src/file-utils.js";
 import { ConfigManager } from "../../src/core/config.js";
 import { Detector } from "../../src/detector.js";
 import { executeTaskCreate } from "../../src/tools/task-create.js";
 import { executeConfigMerge } from "../../src/tools/config-merge.js";
 
-// 真实 agent workspace 路径（来自 openclaw.json）
-const PROJECT = "/home/leonardo123/workspaces/stocking-analysis";
-const AGENTS = {
-  coordinator:         join(PROJECT, "agents/coordinator"),
-  "technical-analyst": join(PROJECT, "agents/technical-analyst"),
-  "industry-analyst":  join(PROJECT, "agents/industry-analyst"),
-};
+// ── 临时目录 setup ───────────────────────────────────────────
+// 模拟 /workspaces/<project>/agents/<agent-name>/ 结构
+let PROJECT: string;
+const AGENTS: Record<string, string> = {};
 
-// 测试后彻底清理（不影响根目录 spec-task/config.yaml）
-function fullCleanup() {
-  for (const key of Object.keys(AGENTS)) {
-    const ws = AGENTS[key as keyof typeof AGENTS];
-    const specTaskDir = join(ws, "spec-task");
-    rmSync(specTaskDir, { recursive: true, force: true });
+function setupProject() {
+  PROJECT = mkdtempSync(join(tmpdir(), "e2e-workspace-"));
+  AGENTS.coordinator = join(PROJECT, "agents", "coordinator");
+  AGENTS["technical-analyst"] = join(PROJECT, "agents", "technical-analyst");
+  AGENTS["industry-analyst"] = join(PROJECT, "agents", "industry-analyst");
+  for (const ws of Object.values(AGENTS)) {
+    mkdirSync(ws, { recursive: true });
   }
 }
+
+// 测试后彻底清理整个临时项目目录
+function fullCleanup() {
+  if (PROJECT) {
+    rmSync(PROJECT, { recursive: true, force: true });
+  }
+}
+
+beforeEach(() => {
+  setupProject();
+});
 
 afterEach(() => {
   fullCleanup();
@@ -58,13 +70,11 @@ describe("E2E: Agent Workspace 隔离", () => {
   // ============================================================
   describe("在 agent workspace 下创建任务", () => {
     it("coordinator 在自己 workspace 下创建任务", async () => {
-      // executeTaskCreate 返回的是 ToolResponse（对象），需要从 content 字段解析
       const response = await executeTaskCreate("t1", {
         task_name: "test-coord-task",
         title: "Coordinator测试",
         project_root: AGENTS.coordinator,
       });
-      // ToolResponse = { content: [{ type: "text", text: "<JSON string>" }] }
       const text = (response as any)?.content?.[0]?.text ?? JSON.stringify(response);
       const result = JSON.parse(typeof text === "string" ? text : JSON.stringify(text));
       expect(result.success).toBe(true);
@@ -90,6 +100,7 @@ describe("E2E: Agent Workspace 隔离", () => {
         task_name: "test-isolated-task",
         project_root: AGENTS.coordinator,
       });
+      // 任务创建在 agents/coordinator/spec-task/ 下，项目根目录不应有 spec-task/
       expect(existsSync(join(PROJECT, "spec-task"))).toBe(false);
     });
   });
@@ -125,7 +136,6 @@ describe("E2E: Agent Workspace 隔离", () => {
   // ============================================================
   describe("Detector 在 agent workspace 下", () => {
     it("coordinator 有新任务时检测为 skeleton（缺文档）", async () => {
-      // 创建任务（只有 status.yaml，缺 brief/spec/plan/checklist）
       await executeTaskCreate("t4", {
         task_name: "detect-test",
         project_root: AGENTS.coordinator,
@@ -139,13 +149,11 @@ describe("E2E: Agent Workspace 隔离", () => {
     });
 
     it("coordinator 有完整文档的任务时检测为 in_progress", async () => {
-      // 创建任务并填充所有文档
       await executeTaskCreate("t5", {
         task_name: "complete-task",
         project_root: AGENTS.coordinator,
       });
       const taskDir = join(AGENTS.coordinator, "spec-task", "complete-task");
-      // 填充必需文档
       for (const doc of ["brief.md", "spec.md", "plan.md", "checklist.md"]) {
         writeFileSync(join(taskDir, doc), `# ${doc}\nTest content\n`);
       }

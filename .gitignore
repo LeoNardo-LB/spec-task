@@ -27,3 +27,8 @@ memory/
 *.tmp
 .env
 .env.*
+
+# Dev docs & tool artifacts
+docs/
+.opencode/
+openspec/
