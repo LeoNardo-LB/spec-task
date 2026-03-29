@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+*:Zone.Identifier
+
+# Test artifacts (spec-task 运行时生成)
+memory/
+/spec-task/
+
+# Runtime
+*.log
+*.tmp
+.env
+.env.*

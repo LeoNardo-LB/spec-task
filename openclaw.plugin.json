@@ -1,0 +1,18 @@
+{
+  "id": "spec-task",
+  "name": "Spec-Task",
+  "version": "2.0.0",
+  "description": "Structured task management with lifecycle enforcement. Provides 8 tools (config_merge, task_recall, task_create, task_transition, task_log, task_verify, task_resume, task_archive) and a before_prompt_build hook for sub-agent compliance.",
+  "skills": ["skills/spec-task"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enforceOnSubAgents": {
+        "type": "boolean",
+        "description": "Whether to inject spec-task reminders for sub-agents (default: true)",
+        "default": true
+      }
+    }
+  }
+}

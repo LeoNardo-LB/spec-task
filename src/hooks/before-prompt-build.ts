@@ -1,0 +1,113 @@
+import type { ArtifactName } from "../types.js";
+import { ConfigManager } from "../core/config.js";
+
+/** L1 自动初始化提醒模板 */
+const INIT_REMINDER = `⚠️ 强制要求：你收到任何任务时，必须先加载 spec-task 技能，并严格按照技能中的工作流程管理任务。不允许跳过。`;
+
+/** L2 轻量提醒模板 */
+const LIGHT_REMINDER = `⚠️ 强制要求：你收到任何任务时，必须先加载 spec-task 技能，并严格按照技能中的工作流程管理任务。不允许跳过。`;
+
+/**
+ * 构建 L3 骨架警告内容。
+ */
+function buildSkeletonWarning(skeletonTasks: Array<{ name: string; missing: ArtifactName[] }>): string {
+  const lines = skeletonTasks.map(t => `  - ${t.name}: 缺少 ${t.missing.join(", ")}`);
+  return `🚨 SPEC-TASK 强制要求：检测到以下任务只有骨架（status.yaml）但缺少核心文档：
+
+${lines.join("\n")}
+
+你必须立即为这些任务填充缺失的文档：
+1. 使用 config_merge 工具检查配置
+2. 使用 task_create 工具创建任务（如未创建）
+3. 按 brief → spec → plan → checklist 拓扑序填充内容
+4. 不允许"先做再说"——没有 plan 的任务不允许进入 running 状态
+
+这是不可协商的工作流要求。跳过此步骤将导致验收失败。`;
+}
+
+/**
+ * 构建 L4 恢复提醒内容。
+ */
+function buildResumeReminder(tasks: Array<{ name: string; status: string }>): string {
+  const lines = tasks.map(t => `  - ${t.name} (${t.status})`);
+  return `📋 SPEC-TASK: 你有未完成的任务：
+${lines.join("\n")}
+
+优先恢复这些任务，使用 task_resume 工具获取断点信息。`;
+}
+
+interface PluginLogger {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
+}
+
+interface HookConfig {
+  enforceOnSubAgents?: boolean;
+}
+
+/**
+ * 创建 before_prompt_build hook 处理器。
+ *
+ * @param logger          插件日志器
+ * @param detector        骨架检测器实例
+ * @param config          插件配置（enforceOnSubAgents 开关）
+ * @param workspaceDirMap 闭包 Map，用于将 workspaceDir 传递给 before_tool_call hook。
+ *                         PluginHookToolContext 没有 workspaceDir 字段，需要在
+ *                         before_prompt_build（PluginHookAgentContext 有 workspaceDir）
+ *                         中记录映射，供 before_tool_call 查找。
+ */
+export function createPromptBuildHandler(
+  logger: PluginLogger,
+  detector: import("../detector.js").Detector,
+  config: HookConfig,
+  workspaceDirMap?: Map<string, string>
+) {
+  const cm = new ConfigManager();
+
+  if (config.enforceOnSubAgents === false) {
+    return async (_context: Record<string, unknown>) => ({});
+  }
+
+  return async (context: Record<string, unknown>, hookCtx: Record<string, unknown>) => {
+    // 工作区路径：优先从 hookCtx.workspaceDir（生产环境），fallback 到 context.cwd（单元测试）
+    const workspaceDir = (hookCtx?.workspaceDir ?? hookCtx?.cwd ?? context.cwd) as string | undefined;
+    if (!workspaceDir) return {};
+
+    // 将 workspaceDir 记录到 Map，供 before_tool_call hook 使用
+    if (workspaceDirMap) {
+      const agentId = (hookCtx?.agentId ?? context.agentId) as string | undefined;
+      const sessionKey = (hookCtx?.sessionKey ?? context.sessionKey) as string | undefined;
+      logger.info(`[spec-task] before_prompt_build: workspaceDir=${workspaceDir} agentId=${agentId} sessionKey=${sessionKey}`);
+      if (agentId) workspaceDirMap.set(agentId, workspaceDir);
+      if (sessionKey) workspaceDirMap.set(sessionKey, workspaceDir);
+    }
+
+    const result = await detector.detect(workspaceDir);
+
+    switch (result.level) {
+      case "none":
+        // 自动初始化：创建 spec-task/config.yaml，注入提醒让 agent 知道 spec-task 可用
+        try {
+          await cm.ensureProjectConfig(workspaceDir, {
+            runtime: { allow_agent_self_delegation: true, task_timeout: 60 },
+            archive: { record_history: true, generate_lessons: true, auto_archive: false },
+          });
+          logger.info(`[spec-task] Auto-initialized spec-task/ at ${workspaceDir}`);
+          return { prependContext: INIT_REMINDER };
+        } catch (e) {
+          logger.error(`[spec-task] Failed to auto-initialize: ${e}`);
+          return {};
+        }
+      case "empty":
+        return { prependContext: LIGHT_REMINDER };
+      case "skeleton":
+        return { prependContext: buildSkeletonWarning(result.skeleton_tasks) };
+      case "in_progress":
+        return { prependContext: buildResumeReminder(result.incomplete_tasks) };
+      case "all_done":
+        return {};
+    }
+  };
+}
