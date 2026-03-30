@@ -1,6 +1,7 @@
 import { readdir, readFile } from "fs/promises";
 import { join } from "path";
 import type { TaskRecallParams } from "../types.js";
+import { FileUtils } from "../file-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskRecallParamsSchema = {
@@ -105,6 +106,13 @@ export async function executeTaskRecall(
 
   if (!keywords || keywords.trim() === "") {
     return formatError("INVALID_PARAMS", "keywords is required");
+  }
+
+  // 防御：验证 agent_workspace 是有效的 agent workspace
+  const fu = new FileUtils();
+  const wsCheck = await fu.validateWorkspacePath(agent_workspace);
+  if (!wsCheck.valid) {
+    return formatError("INVALID_PARAMS", `Invalid agent_workspace: ${wsCheck.reason}`);
   }
 
   const terms = filterStopWords(keywords);

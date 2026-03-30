@@ -1,5 +1,8 @@
 import type { ArtifactName } from "../types.js";
 import { ConfigManager } from "../core/config.js";
+import { FileUtils } from "../file-utils.js";
+import { join } from "path";
+import { readdir } from "fs/promises";
 
 /** L1 自动初始化提醒模板 */
 const INIT_REMINDER = `⚠️ 强制要求：你收到任何任务时，必须先加载 spec-task 技能，并严格按照技能中的工作流程管理任务。不允许跳过。`;
@@ -69,6 +72,70 @@ ${lines.join("\n")}
 优先恢复这些任务，使用 task_resume 工具获取断点信息。`;
 }
 
+/** 匹配 checkbox 行 */
+const CHECKBOX_REGEX = /^- \[([ x])\]\s*(.+)/;
+/** 提取步骤编号 */
+const STEP_PATTERN = /^(\d+(?:\.\d+)+)/;
+
+/**
+ * 扫描工作区中所有任务的 checklist.md，生成结构化状态摘要。
+ * 用于在 system prompt 中注入 checklist 进度信息，提醒 LLM 及时打勾。
+ */
+async function buildChecklistStatusSummary(workspaceDir: string): Promise<string | null> {
+  const fu = new FileUtils();
+  const specTaskDir = join(workspaceDir, "spec-task");
+
+  try {
+    const entries = await readdir(specTaskDir, { withFileTypes: true });
+    const summaryLines: string[] = [];
+
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+
+      const checklistPath = join(specTaskDir, entry.name, "checklist.md");
+      const stat = await fu.safeStat(checklistPath);
+      if (!stat || !stat.isFile()) continue;
+
+      const content = await fu.safeReadFile(checklistPath);
+      if (!content) continue;
+
+      let total = 0;
+      let completed = 0;
+      const uncheckedSteps: string[] = [];
+
+      for (const line of content.split("\n")) {
+        const match = line.match(CHECKBOX_REGEX);
+        if (!match) continue;
+
+        const checked = match[1] === "x";
+        const text = match[2].trim();
+        const stepMatch = text.match(STEP_PATTERN);
+
+        if (stepMatch) {
+          total++;
+          if (checked) {
+            completed++;
+          } else {
+            uncheckedSteps.push(stepMatch[1]);
+          }
+        }
+      }
+
+      if (total > 0 && completed < total) {
+        const stepsPreview = uncheckedSteps.slice(0, 5).join(", ");
+        const suffix = uncheckedSteps.length > 5 ? `...` : "";
+        summaryLines.push(`  - ${entry.name}: ${completed}/${total} 步完成，未完成: ${stepsPreview}${suffix}`);
+      }
+    }
+
+    if (summaryLines.length === 0) return null;
+
+    return `\n📋 Checklist 进度（每完成一步必须调用 checklist_update 打勾）：\n${summaryLines.join("\n")}`;
+  } catch {
+    return null;
+  }
+}
+
 interface PluginLogger {
   info: (...args: unknown[]) => void;
   warn: (...args: unknown[]) => void;
@@ -96,7 +163,8 @@ export function createPromptBuildHandler(
   logger: PluginLogger,
   detector: import("../detector.js").Detector,
   config: HookConfig,
-  workspaceDirMap?: Map<string, string>
+  workspaceDirMap?: Map<string, string>,
+  normalizeKey?: (key: string | undefined) => string | undefined
 ) {
   const cm = new ConfigManager();
 
@@ -114,8 +182,13 @@ export function createPromptBuildHandler(
       const agentId = (hookCtx?.agentId ?? context.agentId) as string | undefined;
       const sessionKey = (hookCtx?.sessionKey ?? context.sessionKey) as string | undefined;
       logger.info(`[spec-task] before_prompt_build: workspaceDir=${workspaceDir} agentId=${agentId} sessionKey=${sessionKey}`);
-      if (agentId) workspaceDirMap.set(agentId, workspaceDir);
-      if (sessionKey) workspaceDirMap.set(sessionKey, workspaceDir);
+      // 使用规范化键存储，确保 before_tool_call 的大小写不敏感查找能命中
+      const norm = normalizeKey ?? ((k: string | undefined) => k?.trim().toLowerCase() || undefined);
+      if (agentId) workspaceDirMap.set(norm(agentId)!, workspaceDir);
+      if (sessionKey) workspaceDirMap.set(norm(sessionKey)!, workspaceDir);
+      // 同时保留原始键，最大化查找命中率
+      if (agentId && norm(agentId) !== agentId) workspaceDirMap.set(agentId, workspaceDir);
+      if (sessionKey && norm(sessionKey) !== sessionKey) workspaceDirMap.set(sessionKey, workspaceDir);
     }
 
     const result = await detector.detect(workspaceDir);
@@ -147,10 +220,16 @@ export function createPromptBuildHandler(
         }
         // 其他级别：注入介入评估提示词
         return { prependContext: buildInterventionPrompt(interventionLevel, INTERVENTION_THRESHOLDS[interventionLevel]) };
-      case "skeleton":
-        return { prependContext: buildSkeletonWarning(result.skeleton_tasks) };
-      case "in_progress":
-        return { prependContext: buildResumeReminder(result.incomplete_tasks) };
+      case "skeleton": {
+        const checklistSummary = await buildChecklistStatusSummary(workspaceDir);
+        const skeletonWarning = buildSkeletonWarning(result.skeleton_tasks);
+        return { prependContext: checklistSummary ? `${skeletonWarning}\n${checklistSummary}` : skeletonWarning };
+      }
+      case "in_progress": {
+        const checklistSummary = await buildChecklistStatusSummary(workspaceDir);
+        const resumeReminder = buildResumeReminder(result.incomplete_tasks);
+        return { prependContext: checklistSummary ? `${resumeReminder}\n${checklistSummary}` : resumeReminder };
+      }
       case "all_done":
         return {};
     }

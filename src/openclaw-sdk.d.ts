@@ -10,9 +10,15 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
   }): Record<string, unknown>;
 }
 
+/**
+ * Minimal type declarations for OpenClaw hook types used by this plugin.
+ * Full definitions live in @mariozechner/pi-ai and @mariozechner/pi-agent-core.
+ * We only declare what we actually use to avoid coupling to internal package versions.
+ */
 declare module "openclaw/plugin-sdk" {
   export interface OpenClawPluginApi {
     config?: Record<string, unknown>;
+    pluginConfig?: Record<string, unknown>;
     logger: {
       info: (...args: unknown[]) => void;
       warn: (...args: unknown[]) => void;
@@ -30,3 +36,15 @@ declare module "openclaw/plugin-sdk" {
 
   export function emptyPluginConfigSchema(): Record<string, unknown>;
 }
+
+/**
+ * AgentMessage — union of LLM messages + custom messages.
+ * We only need the toolResult shape for tool_result_persist hook.
+ */
+type AgentMessage = {
+  role: string;
+  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
+  toolCallId?: string;
+  toolName?: string;
+  [key: string]: unknown;
+};

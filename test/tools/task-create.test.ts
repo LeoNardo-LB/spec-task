@@ -205,18 +205,14 @@ describe("executeTaskCreate", () => {
     expect(status.revisions[0].timestamp).toBe("2026-03-29T10:00:00.000Z");
   });
 
-  it("should create .gitignore with correct content", async () => {
+  it("should NOT create .gitignore (removed as unnecessary)", async () => {
     const result = await executeTaskCreate("tool-13", {
       task_name: "git-task",
       project_root: tmpDir,
     });
     const data = parseResult(result.content[0].text);
     const gitignorePath = join(data.task_dir, ".gitignore");
-    expect(existsSync(gitignorePath)).toBe(true);
-
-    const content = readFileSync(gitignorePath, "utf-8");
-    expect(content).toContain("status.yaml");
-    expect(content).toContain("*.tmp");
+    expect(existsSync(gitignorePath)).toBe(false);
   });
 
   it("should return complete TaskCreateResult structure", async () => {

@@ -70,10 +70,13 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(createResult.task_id).toBe("lifecycle-full");
     const taskDir: string = createResult.task_dir;
 
-    // Verify task dir structure created by real tool
-    expect((await stat(join(taskDir, "outputs"))).isDirectory()).toBe(true);
-    expect((await stat(join(taskDir, "subtasks"))).isDirectory()).toBe(true);
-    expect((await stat(join(taskDir, ".gitignore"))).isFile()).toBe(true);
+    // Verify task dir structure
+    expect((await stat(taskDir)).isDirectory()).toBe(true);
+    expect((await stat(join(taskDir, "status.yaml"))).isFile()).toBe(true);
+    // outputs/, subtasks/, .gitignore are NOT pre-created
+    expect(() => stat(join(taskDir, "outputs"))).rejects.toThrow();
+    expect(() => stat(join(taskDir, "subtasks"))).rejects.toThrow();
+    expect(() => stat(join(taskDir, ".gitignore"))).rejects.toThrow();
 
     // Step 2: Transition to assigned
     const assignedResult = await callAndParse(executeTaskTransition, "test-id", {
@@ -133,7 +136,7 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(status.revisions[3].status_after).toBe("completed");
   });
 
-  it("2. task_create creates subdirs: outputs/, subtasks/, .gitignore all exist", async () => {
+  it("2. task_create creates task dir with status.yaml only", async () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "subdir-check",
       project_root: env.projectRoot,
@@ -142,18 +145,19 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(createResult.success).toBe(true);
     const taskDir: string = createResult.task_dir;
 
-    // Verify all subdirectories and files exist
+    // Verify task dir structure
     expect((await stat(taskDir)).isDirectory()).toBe(true);
-    expect((await stat(join(taskDir, "outputs"))).isDirectory()).toBe(true);
-    expect((await stat(join(taskDir, "subtasks"))).isDirectory()).toBe(true);
-    expect((await stat(join(taskDir, ".gitignore"))).isFile()).toBe(true);
     expect((await stat(join(taskDir, "status.yaml"))).isFile()).toBe(true);
+    // outputs/, subtasks/, .gitignore are NOT pre-created
+    expect(() => stat(join(taskDir, "outputs"))).rejects.toThrow();
+    expect(() => stat(join(taskDir, "subtasks"))).rejects.toThrow();
+    expect(() => stat(join(taskDir, ".gitignore"))).rejects.toThrow();
 
-    // Verify .gitignore content
+    // Verify status.yaml is valid YAML with expected fields
     const { readFile } = await import("fs/promises");
-    const gitignoreContent = await readFile(join(taskDir, ".gitignore"), "utf-8");
-    expect(gitignoreContent).toContain("status.yaml");
-    expect(gitignoreContent).toContain("*.tmp");
+    const statusContent = await readFile(join(taskDir, "status.yaml"), "utf-8");
+    expect(statusContent).toContain("task_id: subdir-check");
+    expect(statusContent).toContain("status: pending");
   });
 
   it("3. task_transition state machine enforcement: pending → running should fail", async () => {

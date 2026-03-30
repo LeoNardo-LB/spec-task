@@ -252,6 +252,16 @@ export interface TaskArchiveParams {
   dry_run?: boolean;
 }
 
+export interface ChecklistUpdateParams {
+  task_dir: string;
+  step_number: string;
+  checked: boolean;
+}
+
+export interface ChecklistStatusParams {
+  task_dir: string;
+}
+
 // ============================================================================
 // 工具返回类型
 // ============================================================================
@@ -273,6 +283,24 @@ export interface TaskTransitionResult extends ToolResult {
   new_status: TaskStatus;
   progress: TaskProgress;
   revision_id: number;
+}
+
+export interface ChecklistUpdateResult extends ToolResult {
+  task_dir: string;
+  step_number: string;
+  checked: boolean;
+  line_before: string;
+  line_after: string;
+  progress: TaskProgress;
+}
+
+export interface ChecklistStatusResult extends ToolResult {
+  total_steps: number;
+  completed_steps: number;
+  progress_percent: number;
+  unchecked_steps: string[];
+  next_suggested_step: string | null;
+  checklist_path: string;
 }
 
 // ============================================================================
@@ -299,6 +327,7 @@ export interface DetectorResult {
 
 export const SPEC_TASK_ERRORS = {
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
+  CHECKLIST_NOT_FOUND: "CHECKLIST_NOT_FOUND",
   TASK_ALREADY_EXISTS: "TASK_ALREADY_EXISTS",
   INVALID_TRANSITION: "INVALID_TRANSITION",
   DUPLICATE_BLOCK: "DUPLICATE_BLOCK",

@@ -3,6 +3,7 @@ import { join, basename } from "path";
 import type { TaskArchiveParams, TaskStatusData } from "../types.js";
 import { SPEC_TASK_ERRORS } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
+import { FileUtils } from "../file-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskArchiveParamsSchema = {
@@ -124,6 +125,13 @@ export async function executeTaskArchive(
     agent_name = "agent",
     dry_run = false,
   } = params;
+
+  // 防御：验证 agent_workspace 是有效的 agent workspace
+  const fu = new FileUtils();
+  const wsCheck = await fu.validateWorkspacePath(agent_workspace);
+  if (!wsCheck.valid) {
+    return formatError(SPEC_TASK_ERRORS.TASK_NOT_FOUND, `Invalid agent_workspace: ${wsCheck.reason}`);
+  }
 
   const store = new StatusStore();
 

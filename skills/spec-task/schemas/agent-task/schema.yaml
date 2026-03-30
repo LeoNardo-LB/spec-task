@@ -93,13 +93,15 @@ apply:
     按执行清单逐步执行。使用工具驱动状态管理：
 
     1. 从第一个未勾选的步骤开始
-    2. 每完成一个步骤，勾选对应 checkbox
+    2. **每完成一个步骤，立即调用 `checklist_update` 工具打勾**（参数：task_dir, step_number, checked=true）
+       - 这是原子操作：一次 API 调用更新一个步骤，自动重算进度并更新 status.yaml
+       - 绝对禁止手动编辑 checklist.md 文件来打勾，必须使用 checklist_update 工具
+       - step_number 必须与 checklist.md 中的步骤编号完全匹配（如 "1.1", "2.3"）
     3. 使用 task_transition 工具切换任务阶段（如 pending → assigned）
     4. 使用 task_log 工具记录执行日志（产出物路径、耗时、备注）
-    5. 产出物写入 outputs/ 目录
+    5. 产出物直接写入任务目录下（如 analysis-report.md、data.json 等）
     6. 如需暂停后恢复，使用 task_resume 工具恢复任务上下文
     7. 遇到问题按 failure_policy 处理（参见 SKILL.md 错误处理章节）
-    8. 需要创建子任务时，在 subtasks/ 下创建，结构与父任务相同（但构件可简化）
 
 verify:
   requires: [checklist]

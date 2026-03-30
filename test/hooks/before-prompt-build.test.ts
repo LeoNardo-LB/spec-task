@@ -28,7 +28,7 @@ describe("createPromptBuildHandler", () => {
   it("should auto-initialize and return reminder for L1 (no spec-task directory)", async () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
     // L1 none → 自动创建 spec-task/config.yaml + 注入介入评估提示词（默认 high 级别）
     expect(result).toHaveProperty("prependContext");
     expect((result as any).prependContext).toContain("X.Y.Z");
@@ -43,9 +43,9 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
-    // L2 empty → 默认 high 级别，返回介入评估提示词
+    // L2 empty → 默认 high 级别 → 返回介入评估提示词
     expect(result).toHaveProperty("prependContext");
     expect((result as any).prependContext).toContain("X.Y.Z");
     expect((result as any).prependContext).toContain("high");
@@ -59,7 +59,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     expect(result).toHaveProperty("prependContext");
     const ctx = (result as any).prependContext;
@@ -79,7 +79,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     expect(result).toHaveProperty("prependContext");
     const ctx = (result as any).prependContext;
@@ -98,7 +98,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
     expect(result).toEqual({});
   });
 
@@ -109,7 +109,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { enforceOnSubAgents: false });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
     expect(result).toEqual({});
   });
 
@@ -122,7 +122,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("task-a");
@@ -137,7 +137,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("spec");
@@ -148,7 +148,7 @@ describe("createPromptBuildHandler", () => {
   it("should return empty object when no workspace directory available", async () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({});
+    const result = await handler({}, {});
     expect(result).toEqual({});
   });
 
@@ -170,7 +170,7 @@ describe("createPromptBuildHandler", () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
     // 不传 workspaceDirMap，不应崩溃
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
     expect(result).toHaveProperty("prependContext");
   });
 
@@ -186,7 +186,7 @@ describe("createPromptBuildHandler", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("task-a");
@@ -211,7 +211,7 @@ describe("intervention levels", () => {
   it("always + L1 (none) → INIT_REMINDER (backward compatible)", async () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "always" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     expect((result as any).prependContext).toContain("强制要求");
     expect((result as any).prependContext).not.toContain("叶子节点");
@@ -221,7 +221,7 @@ describe("intervention levels", () => {
     mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "always" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     expect((result as any).prependContext).toContain("强制要求");
     expect((result as any).prependContext).not.toContain("叶子节点");
@@ -232,7 +232,7 @@ describe("intervention levels", () => {
   it("high + L1 (none) → intervention prompt with threshold 3", async () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "high" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("high");
@@ -247,7 +247,7 @@ describe("intervention levels", () => {
     mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "high" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("high");
@@ -260,7 +260,7 @@ describe("intervention levels", () => {
   it("medium + L1 (none) → intervention prompt with threshold 10", async () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "medium" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("medium");
@@ -271,7 +271,7 @@ describe("intervention levels", () => {
     mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "medium" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("medium");
@@ -283,7 +283,7 @@ describe("intervention levels", () => {
   it("low + L1 (none) → intervention prompt with threshold 20", async () => {
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "low" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("low");
@@ -294,7 +294,7 @@ describe("intervention levels", () => {
     mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "low" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("low");
@@ -310,7 +310,7 @@ describe("intervention levels", () => {
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, { interventionLevel: "high" });
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("SPEC-TASK");
@@ -325,7 +325,7 @@ describe("intervention levels", () => {
       mockLogger, detector,
       { enforceOnSubAgents: false, interventionLevel: "low" }
     );
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     expect(result).toEqual({});
   });
@@ -334,7 +334,7 @@ describe("intervention levels", () => {
     mkdirSync(join(tmpDir, "spec-task"), { recursive: true });
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {}); // no interventionLevel
-    const result = await handler({ cwd: tmpDir });
+    const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
     expect(ctx).toContain("high");

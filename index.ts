@@ -35,6 +35,15 @@ import {
   ConfigMergeParamsSchema,
   executeConfigMerge,
 } from "./src/tools/config-merge.js";
+import {
+  ChecklistUpdateParamsSchema,
+  executeChecklistUpdate,
+} from "./src/tools/checklist-update.js";
+import {
+  ChecklistStatusParamsSchema,
+  executeChecklistStatus,
+} from "./src/tools/checklist-status.js";
+import { createToolResultReminderHandler } from "./src/hooks/tool-result-reminder.js";
 
 export default definePluginEntry({
   id: "spec-task",
@@ -54,6 +63,7 @@ export default definePluginEntry({
     // 但 PluginHookAgentContext（before_prompt_build）有。
     // 因此在 before_prompt_build 中记录映射，在 before_tool_call 中查找。
     const workspaceDirMap = new Map<string, string>();
+    const normalizeKey = (k: string | undefined) => k?.trim().toLowerCase() || undefined;
 
     // before_prompt_build: 检测 spec-task 状态，注入系统提示，同时记录 workspaceDir
     api.on(
@@ -89,7 +99,18 @@ export default definePluginEntry({
       return { params: { ...params, project_root: workspaceDir } };
     });
 
-    // ── 工具注册（8 个）──────────────────────────────────────
+    // tool_result_persist: 在每次工具调用结果中注入 checklist 提醒
+    // 利用 LLM 近因效应——提醒出现在最近的上下文中，比 system prompt 更有效
+    api.on(
+      "tool_result_persist",
+      createToolResultReminderHandler(
+        workspaceDirMap,
+        normalizeKey,
+        api.logger
+      )
+    );
+
+    // ── 工具注册（9 个）──────────────────────────────────────
     api.registerTool({
       name: "config_merge",
       description:
@@ -167,6 +188,43 @@ export default definePluginEntry({
       parameters: TaskArchiveParamsSchema,
       async execute(_id, params) {
         return executeTaskArchive(_id, params as any);
+      },
+    });
+
+    api.registerTool({
+      name: "checklist_update",
+      description:
+        `原子更新 checklist.md 中单个步骤的勾选状态。每完成一个步骤后**必须**调用此工具。
+
+**触发条件**：当你完成 checklist 中的任何步骤时，必须调用此工具来打勾。不要手动编辑 checklist.md 文件。
+
+**参数说明**：
+- task_dir（必填）：任务目录的绝对路径（task_create 返回的 task_dir）
+- step_number（必填）：步骤编号，如 '1.1'、'2.3'。必须与 checklist.md 中的编号完全匹配
+- checked（必填）：true 表示勾选（标记为完成），false 表示取消勾选
+
+**正例**：
+✅ 完成数据获取后调用 checklist_update(task_dir, '1.1', true)
+✅ 发现步骤标记错误时调用 checklist_update(task_dir, '1.2', false) 取消
+
+**反例**：
+❌ 直接编辑 checklist.md 文件来打勾——这是禁止的，必须使用此工具
+❌ 将未完成的步骤标记为已完成——不要虚假打勾
+
+**状态约束**：一次只能打勾一个步骤。自动重新计算进度并更新 status.yaml。`,
+      parameters: ChecklistUpdateParamsSchema,
+      async execute(_id, params) {
+        return executeChecklistUpdate(_id, params as any);
+      },
+    });
+
+    api.registerTool({
+      name: "checklist_status",
+      description:
+        "查询指定任务的 checklist 完成进度（只读，不修改任何文件）。返回总步骤数、已完成数、完成百分比、未完成步骤列表和建议的下一步骤。",
+      parameters: ChecklistStatusParamsSchema,
+      async execute(_id, params) {
+        return executeChecklistStatus(_id, params as any);
       },
     });
   },

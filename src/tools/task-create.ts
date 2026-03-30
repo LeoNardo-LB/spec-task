@@ -1,4 +1,3 @@
-import { writeFile } from "fs/promises";
 import { join } from "path";
 import type { TaskCreateParams, TaskStatusData, TaskCreateResult } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
@@ -22,7 +21,7 @@ export const TaskCreateParamsSchema = {
 
 /**
  * task_create 工具实现。
- * 创建目录结构 → 初始化 status.yaml → 创建 revision → 注册父子关系 → 创建 .gitignore。
+ * 创建目录结构 → 初始化 status.yaml → 创建 revision → 注册父子关系。
  */
 export async function executeTaskCreate(
   _id: string,
@@ -44,6 +43,13 @@ export async function executeTaskCreate(
     return formatError("INVALID_PARAMS", `task_name contains illegal characters: ${task_name}`);
 
   const fu = new FileUtils();
+
+  // 防御：验证 project_root 是 agent workspace 而非项目根目录
+  const wsCheck = await fu.validateWorkspacePath(project_root);
+  if (!wsCheck.valid) {
+    return formatError("INVALID_PARAMS", `Invalid project_root: ${wsCheck.reason}`);
+  }
+
   const store = new StatusStore();
   const rb = new RevisionBuilder();
   const taskDir = fu.resolveTaskDir(task_name, project_root);
@@ -52,11 +58,8 @@ export async function executeTaskCreate(
   if (await fu.safeStat(join(taskDir, "status.yaml")))
     return formatError("TASK_ALREADY_EXISTS", `Task '${task_name}' already exists at ${taskDir}`);
 
-  // 3. 创建目录 + 子目录 + .gitignore
+  // 3. 创建任务目录
   await fu.ensureDir(taskDir);
-  await fu.ensureDir(join(taskDir, "outputs"));
-  await fu.ensureDir(join(taskDir, "subtasks"));
-  await writeFile(join(taskDir, ".gitignore"), "status.yaml\n*.tmp\n", "utf-8");
 
   // 4. 构建初始 status
   const now = new Date().toISOString();
