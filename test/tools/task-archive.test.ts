@@ -33,12 +33,11 @@ describe("executeTaskArchive", () => {
       assigned_to: "agent-1",
       started_at: "2026-03-29T01:00:00.000Z",
       completed_at: "2026-03-29T12:00:00.000Z",
-      progress: { total: 5, completed: 5, current_step: "", percentage: 100 },
-      parent: null,
-      depth: 0,
+      progress: { total: 5, completed: 5, skipped: 0, current_step: "", percentage: 100 },
       children: [],
       outputs: ["/path/to/output.txt"],
-      timing: { estimated_minutes: 30, elapsed_minutes: 660 },
+      steps: [],
+      timing: { elapsed_minutes: 660 },
       errors: [],
       alerts: [],
       blocked_by: [],
@@ -182,7 +181,7 @@ describe("executeTaskArchive", () => {
     const taskDir = createTask({
       assigned_to: "agent-special",
       outputs: ["/out/report.html", "/out/data.json"],
-      progress: { total: 10, completed: 8, current_step: "9.1", percentage: 80 },
+      progress: { total: 10, completed: 8, skipped: 0, current_step: "9.1", percentage: 80 },
     });
 
     await executeTaskArchive("t-7", {

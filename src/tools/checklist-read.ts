@@ -1,7 +1,9 @@
 import { join, resolve } from "path";
-import type { ChecklistReadParams, ChecklistReadResult } from "../types.js";
+import { readFileSync, existsSync } from "fs";
+import YAML from "yaml";
+import type { ChecklistReadParams, ChecklistReadResult, Step, TaskProgress } from "../types.js";
 import { FileUtils } from "../file-utils.js";
-import { calculateProgressSync } from "../core/checklist-utils.js";
+import { calculateProgressFromSteps, loadStepsFromStatus, markdownToSteps, syncStepsToStatus } from "../core/checklist-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const ChecklistReadParamsSchema = {
@@ -18,8 +20,9 @@ export const ChecklistReadParamsSchema = {
 /**
  * checklist_read 工具实现。
  *
- * 全量读取 checklist.md 内容 + 结构化进度统计。
- * 不修改任何文件。
+ * 从 status.yaml.steps 读取结构化步骤数据。
+ * 如果 steps 不存在但 checklist.md 存在，自动迁移。
+ * 如果两者都不存在，返回错误。
  */
 export async function executeChecklistRead(
   _id: string,
@@ -35,25 +38,39 @@ export async function executeChecklistRead(
   const fu = new FileUtils();
   const checklistPath = resolve(task_dir, "checklist.md");
 
-  // 2. 检查 checklist.md 是否存在
-  const checklistStat = await fu.safeStat(checklistPath);
-  if (!checklistStat || !checklistStat.isFile()) {
-    return formatError("CHECKLIST_NOT_FOUND", `checklist.md not found at ${checklistPath}`);
+  // 2. 尝试从 status.yaml.steps 读取
+  let steps = loadStepsFromStatus(task_dir);
+  let content: string | null = null;
+
+  // 3. 读取 checklist.md 内容（如果存在）
+  if (existsSync(checklistPath)) {
+    try {
+      content = readFileSync(checklistPath, "utf-8");
+    } catch {
+      content = null;
+    }
   }
 
-  // 3. 读取内容
-  const content = await fu.safeReadFile(checklistPath);
-  if (!content) {
-    return formatError("CHECKLIST_NOT_FOUND", `checklist.md is empty or unreadable at ${checklistPath}`);
+  // 4. 向后兼容：steps 不存在但 checklist.md 存在时，自动迁移
+  if (!steps && content) {
+    console.warn(`[spec-task] Auto-migrated checklist.md → status.yaml.steps for ${task_dir}`);
+    steps = markdownToSteps(content);
+    syncStepsToStatus(task_dir, steps);
   }
 
-  // 4. 计算进度（复用 checklist-utils 的 calculateProgressSync）
-  const progress = calculateProgressSync(content);
+  // 5. 两者都不存在
+  if (!steps || steps.length === 0) {
+    return formatError("CHECKLIST_NOT_FOUND", `No checklist data found at ${task_dir}`);
+  }
+
+  // 6. 从 steps 计算进度
+  const progress: TaskProgress = calculateProgressFromSteps(steps);
 
   return formatResult({
     success: true,
-    content,
+    steps,
     progress,
+    content,
     checklist_path: checklistPath,
   } satisfies ChecklistReadResult);
 }

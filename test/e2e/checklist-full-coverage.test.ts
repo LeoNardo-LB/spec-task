@@ -105,6 +105,7 @@ describe("E2E: Checklist Full-Coverage Tool Chain", () => {
       expect(data.content).toBe(INITIAL_CHECKLIST);
       expect(data.progress.total).toBe(10);
       expect(data.progress.completed).toBe(0);
+      expect(data.progress.skipped).toBe(0);
       expect(data.progress.percentage).toBe(0);
       expect(data.progress.current_step).toBe("1.1");
     });
@@ -139,6 +140,7 @@ describe("E2E: Checklist Full-Coverage Tool Chain", () => {
 
       expect(data.progress.total).toBe(10);
       expect(data.progress.completed).toBe(5);
+      expect(data.progress.skipped).toBe(0);
       expect(data.progress.percentage).toBe(50);
       expect(data.progress.current_step).toBe("3.1");
 
@@ -192,6 +194,7 @@ describe("E2E: Checklist Full-Coverage Tool Chain", () => {
 
       expect(data.progress.total).toBe(10);  // 删除了 4.2，新增了 4.3，总数不变
       expect(data.progress.completed).toBe(7);  // 1.1-1.2, 2.1-2.3, 3.1, 4.1 已勾选
+      expect(data.progress.skipped).toBe(0);
       expect(data.progress.percentage).toBe(70);
       expect(data.progress.current_step).toBe("4.3");
 
@@ -232,6 +235,7 @@ describe("E2E: Checklist Full-Coverage Tool Chain", () => {
 
       expect(readData.progress.total).toBe(10);
       expect(readData.progress.completed).toBe(10);
+      expect(readData.progress.skipped).toBe(0);
       expect(readData.progress.percentage).toBe(100);
       expect(readData.progress.current_step).toBe("");  // 全部完成，无下一步
     });
@@ -342,6 +346,7 @@ describe("E2E: Checklist Full-Coverage Tool Chain", () => {
       // 只统计有编号的 3 个步骤
       expect(data.progress.total).toBe(3);
       expect(data.progress.completed).toBe(2);  // 1.1 和 2.1
+      expect(data.progress.skipped).toBe(0);
       expect(data.progress.percentage).toBe(67);
       expect(data.progress.current_step).toBe("1.2");
     });
@@ -359,10 +364,9 @@ describe("E2E: Checklist Full-Coverage Tool Chain", () => {
       const result = await executeChecklistRead("cl-1", { task_dir: taskDir });
       const data = parseResult(result.content[0].text);
 
-      expect(data.success).toBe(true);
-      expect(data.progress.total).toBe(0);
-      expect(data.progress.completed).toBe(0);
-      expect(data.progress.percentage).toBe(0);
+      // 无 checkbox 行 → 无步骤 → CHECKLIST_NOT_FOUND
+      expect(data.success).toBe(false);
+      expect(data.error).toBe("CHECKLIST_NOT_FOUND");
     });
   });
 });

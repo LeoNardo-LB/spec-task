@@ -2,10 +2,17 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
-import { parseChecklist, toggleStep, updateProgress } from "../checklist-utils.js";
+import {
+  parseChecklist,
+  markdownToSteps,
+  calculateProgressFromSteps,
+  syncStepsToStatus,
+  loadStepsFromStatus,
+} from "../checklist-utils.js";
+import type { Step } from "../../types.js";
 
 // ============================================================================
-// 测试用的临时目录
+// 临时目录
 // ============================================================================
 
 let tmpDir: string;
@@ -29,7 +36,9 @@ afterEach(() => {
 // ============================================================================
 
 describe("parseChecklist", () => {
-  it("should parse checked and unchecked steps", () => {
+  // ---- 基础解析 ----
+
+  it("should parse [x] as completed and [ ] as pending", () => {
     const content = [
       "- [x] 1.1 First step done",
       "- [ ] 1.2 Second step pending",
@@ -39,24 +48,50 @@ describe("parseChecklist", () => {
     const steps = parseChecklist(content);
 
     expect(steps).toHaveLength(3);
-    expect(steps[0]).toEqual({ checked: true, text: "1.1 First step done", stepNumber: "1.1", tag: undefined });
-    expect(steps[1]).toEqual({ checked: false, text: "1.2 Second step pending", stepNumber: "1.2", tag: undefined });
-    expect(steps[2]).toEqual({ checked: true, text: "2.1 Another done step", stepNumber: "2.1", tag: undefined });
+    expect(steps[0]).toEqual({
+      stepNumber: "1.1",
+      text: "1.1 First step done",
+      status: "completed",
+      tag: undefined,
+      skipReason: undefined,
+    });
+    expect(steps[1]).toEqual({
+      stepNumber: "1.2",
+      text: "1.2 Second step pending",
+      status: "pending",
+      tag: undefined,
+      skipReason: undefined,
+    });
+    expect(steps[2]).toEqual({
+      stepNumber: "2.1",
+      text: "2.1 Another done step",
+      status: "completed",
+      tag: undefined,
+      skipReason: undefined,
+    });
   });
 
-  it("should extract step numbers", () => {
+  it("should parse [-] as skipped with skip_reason extracted from parentheses", () => {
     const content = [
-      "- [ ] 1.1 Simple step",
-      "- [ ] 10.20 Deeply nested step",
-      "- [ ] 1.2.3 Multi-level step",
+      "- [-] 1.1 Optional validation (数据不可用)",
+      "- [-] 1.2 Skipped without reason",
+      "- [-] 1.3 Another skip (环境不支持)",
     ].join("\n");
 
     const steps = parseChecklist(content);
 
-    expect(steps[0].stepNumber).toBe("1.1");
-    expect(steps[1].stepNumber).toBe("10.20");
-    expect(steps[2].stepNumber).toBe("1.2.3");
+    expect(steps).toHaveLength(3);
+    expect(steps[0].status).toBe("skipped");
+    expect(steps[0].skipReason).toBe("数据不可用");
+
+    expect(steps[1].status).toBe("skipped");
+    expect(steps[1].skipReason).toBeUndefined();
+
+    expect(steps[2].status).toBe("skipped");
+    expect(steps[2].skipReason).toBe("环境不支持");
   });
+
+  // ---- 标签提取 ----
 
   it("should extract tags like [spawn:xxx]", () => {
     const content = [
@@ -72,140 +107,382 @@ describe("parseChecklist", () => {
     expect(steps[2].tag).toBeUndefined();
   });
 
+  it("should extract tags from completed and skipped steps too", () => {
+    const content = [
+      "- [x] 1.1 [spawn:setup] Setup environment",
+      "- [-] 1.2 [spawn:cleanup] Cleanup (不再需要)",
+    ].join("\n");
+
+    const steps = parseChecklist(content);
+
+    expect(steps[0].tag).toBe("spawn:setup");
+    expect(steps[0].status).toBe("completed");
+
+    expect(steps[1].tag).toBe("spawn:cleanup");
+    expect(steps[1].status).toBe("skipped");
+    expect(steps[1].skipReason).toBe("不再需要");
+  });
+
+  // ---- 无步骤编号的行被忽略 ----
+
+  it("should ignore lines without step numbers", () => {
+    const content = [
+      "# Checklist",
+      "",
+      "Some plain text",
+      "- [x] 1.1 Actual step",
+      "- [ ] Unnumbered checkbox step",
+      "  - [ ] 1.2 Indented checkbox",
+      "Just another line",
+    ].join("\n");
+
+    const steps = parseChecklist(content);
+
+    // Only "1.1 Actual step" has a step number; indented line starts with space so regex ^- doesn't match
+    expect(steps).toHaveLength(1);
+    expect(steps[0].stepNumber).toBe("1.1");
+  });
+
+  it("should ignore phase headers and non-checkbox lines", () => {
+    const content = [
+      "# Phase 1: Setup",
+      "## 1.0 Preparation",
+      "- [ ] 1.1 Create project",
+      "",
+      "## Phase 2: Build",
+      "- [x] 2.1 Build component",
+      "- This is not a checkbox",
+      "3.1 Random numbered line",
+    ].join("\n");
+
+    const steps = parseChecklist(content);
+
+    expect(steps).toHaveLength(2);
+    expect(steps[0].stepNumber).toBe("1.1");
+    expect(steps[1].stepNumber).toBe("2.1");
+  });
+
+  // ---- 边界情况 ----
+
   it("should return empty array for empty content", () => {
     expect(parseChecklist("")).toEqual([]);
     expect(parseChecklist("   \n\n   ")).toEqual([]);
     expect(parseChecklist("# Some header\n## Another header\n")).toEqual([]);
   });
 
-  it("should skip non-checkbox lines", () => {
+  it("should handle multi-level step numbers", () => {
     const content = [
-      "# Checklist",
-      "",
-      "Some plain text",
-      "- [x] 1.1 Actual step",
-      "- not a checkbox line",
-      "  - [ ] 1.2 Indented checkbox",
+      "- [ ] 1.1 Simple step",
+      "- [ ] 10.20 Deeply nested step",
+      "- [ ] 1.2.3 Multi-level step",
     ].join("\n");
 
     const steps = parseChecklist(content);
 
-    // Indented checkbox should NOT match (regex requires line start ^-)
+    expect(steps[0].stepNumber).toBe("1.1");
+    expect(steps[1].stepNumber).toBe("10.20");
+    expect(steps[2].stepNumber).toBe("1.2.3");
+  });
+
+  it("should treat lines with single numbers (no dot) as non-step lines", () => {
+    const content = [
+      "- [ ] 1 Single number step",
+      "- [ ] 1.1 Proper step number",
+    ].join("\n");
+
+    const steps = parseChecklist(content);
+
+    // "1" does not match \d+(?:\.\d+)+ — requires at least one dot
     expect(steps).toHaveLength(1);
     expect(steps[0].stepNumber).toBe("1.1");
   });
 });
 
 // ============================================================================
-// toggleStep
+// markdownToSteps
 // ============================================================================
 
-describe("toggleStep", () => {
-  const sampleContent = [
-    "- [x] 1.1 First step done",
-    "- [ ] 1.2 Second step pending",
-    "- [ ] 2.1 Third step pending",
-    "- [x] 2.2 Fourth step done",
-  ].join("\n");
+describe("markdownToSteps", () => {
+  // ---- 基础转换 ----
 
-  it("should toggle an unchecked step to checked", () => {
-    const result = toggleStep(sampleContent, (s) => s.stepNumber === "1.2", true);
-
-    expect(result.matched).toBe(true);
-    expect(result.content).toContain("- [x] 1.2 Second step pending");
-    // Other lines should remain unchanged
-    expect(result.content).toContain("- [x] 1.1 First step done");
-    expect(result.content).toContain("- [ ] 2.1 Third step pending");
-    expect(result.content).toContain("- [x] 2.2 Fourth step done");
-  });
-
-  it("should toggle a checked step to unchecked", () => {
-    const result = toggleStep(sampleContent, (s) => s.stepNumber === "1.1", false);
-
-    expect(result.matched).toBe(true);
-    expect(result.content).toContain("- [ ] 1.1 First step done");
-  });
-
-  it("should not modify when status matches (already checked, trying to check)", () => {
-    const result = toggleStep(sampleContent, (s) => s.stepNumber === "1.1", true);
-
-    expect(result.matched).toBe(false);
-    expect(result.content).toBe(sampleContent);
-  });
-
-  it("should not modify when status matches (already unchecked, trying to uncheck)", () => {
-    const result = toggleStep(sampleContent, (s) => s.stepNumber === "1.2", false);
-
-    expect(result.matched).toBe(false);
-    expect(result.content).toBe(sampleContent);
-  });
-
-  it("should return matched=false when no step matches", () => {
-    const result = toggleStep(sampleContent, (s) => s.stepNumber === "99.99", true);
-
-    expect(result.matched).toBe(false);
-    expect(result.content).toBe(sampleContent);
-  });
-
-  it("should match by step number", () => {
-    const result = toggleStep(sampleContent, (s) => s.stepNumber === "2.2", false);
-
-    expect(result.matched).toBe(true);
-    expect(result.content).toContain("- [ ] 2.2 Fourth step done");
-  });
-
-  it("should match by tag", () => {
-    const tagContent = [
-      "- [ ] 1.1 [spawn:financial-valuation] Create model",
-      "- [ ] 1.2 [spawn:risk-assessment] Evaluate risks",
+  it("should convert markdown to Step array with correct fields", () => {
+    const content = [
+      "- [ ] 1.1 Create project structure",
+      "- [x] 1.2 Setup dependencies",
+      "- [-] 1.3 Run tests (CI unavailable)",
     ].join("\n");
 
-    const result = toggleStep(tagContent, (s) => s.tag === "spawn:financial-valuation", true);
+    const steps = markdownToSteps(content);
 
-    expect(result.matched).toBe(true);
-    expect(result.content).toContain("- [x] 1.1 [spawn:financial-valuation] Create model");
-    // Other lines unchanged
-    expect(result.content).toContain("- [ ] 1.2 [spawn:risk-assessment] Evaluate risks");
+    expect(steps).toHaveLength(3);
+
+    // Pending step
+    expect(steps[0].id).toBe("1.1");
+    expect(steps[0].status).toBe("pending");
+    expect(steps[0].completed_at).toBeNull();
+    expect(steps[0].tags).toEqual([]);
+    expect(steps[0].text).toBe("Create project structure");
+
+    // Completed step
+    expect(steps[1].id).toBe("1.2");
+    expect(steps[1].status).toBe("completed");
+    expect(steps[1].completed_at).not.toBeNull();
+    expect(steps[1].text).toBe("Setup dependencies");
+
+    // Skipped step
+    expect(steps[2].id).toBe("1.3");
+    expect(steps[2].status).toBe("skipped");
+    expect(steps[2].completed_at).not.toBeNull();
+    expect(steps[2].skip_reason).toBe("CI unavailable");
+    expect(steps[2].text).toBe("Run tests");
   });
 
-  it("should match by partial text", () => {
-    const result = toggleStep(sampleContent, (s) => s.text.includes("Third step"), true);
-
-    expect(result.matched).toBe(true);
-    expect(result.content).toContain("- [x] 2.1 Third step pending");
-  });
-
-  it("should only modify the first matching step", () => {
-    const multiMatch = [
-      "- [ ] 1.1 Step A",
-      "- [ ] 1.2 Step B",
-      "- [ ] 1.3 Step A duplicate",
+  it("should strip step number, tag, and skip_reason from text", () => {
+    const content = [
+      "- [x] 1.1 [spawn:setup] Create project (fast track)",
     ].join("\n");
 
-    const result = toggleStep(multiMatch, (s) => s.text.includes("Step A"), true);
+    const steps = markdownToSteps(content);
 
-    expect(result.matched).toBe(true);
-    const lines = result.content.split("\n");
-    expect(lines[0]).toContain("[x]");
-    expect(lines[2]).toContain("[ ]"); // Third step should remain unchecked
+    expect(steps[0].text).toBe("Create project");
+    expect(steps[0].tags).toEqual(["spawn:setup"]);
+  });
+
+  // ---- completed_at 保留 ----
+
+  it("should preserve completed_at from existingSteps", () => {
+    const content = [
+      "- [x] 1.1 Step one",
+      "- [x] 1.2 Step two",
+      "- [ ] 1.3 Step three",
+    ].join("\n");
+
+    const existingSteps: Step[] = [
+      {
+        id: "1.1",
+        text: "Step one",
+        status: "completed",
+        completed_at: "2025-01-15T10:00:00.000Z",
+        tags: [],
+      },
+      {
+        id: "1.2",
+        text: "Step two",
+        status: "completed",
+        completed_at: "2025-01-16T12:00:00.000Z",
+        tags: [],
+      },
+    ];
+
+    const steps = markdownToSteps(content, existingSteps);
+
+    // Should preserve original timestamps
+    expect(steps[0].completed_at).toBe("2025-01-15T10:00:00.000Z");
+    expect(steps[1].completed_at).toBe("2025-01-16T12:00:00.000Z");
+    // Pending step stays null
+    expect(steps[2].completed_at).toBeNull();
+  });
+
+  it("should use current timestamp for completed steps not in existingSteps", () => {
+    const content = "- [x] 1.1 New completed step\n";
+
+    const steps = markdownToSteps(content);
+
+    expect(steps[0].completed_at).not.toBeNull();
+    const ts = new Date(steps[0].completed_at!);
+    expect(ts.getTime()).not.toBeNaN();
+  });
+
+  it("should use current timestamp when no existingSteps provided", () => {
+    const content = [
+      "- [x] 1.1 First step",
+      "- [-] 1.2 Skipped step (reason)",
+    ].join("\n");
+
+    const steps = markdownToSteps(content);
+
+    expect(steps[0].completed_at).not.toBeNull();
+    expect(steps[1].completed_at).not.toBeNull();
+  });
+
+  // ---- 标签提取 ----
+
+  it("should extract tags into the tags array", () => {
+    const content = [
+      "- [ ] 1.1 [spawn:alpha] Task alpha",
+      "- [ ] 1.2 [spawn:beta] Task beta",
+      "- [ ] 1.3 No tag task",
+    ].join("\n");
+
+    const steps = markdownToSteps(content);
+
+    expect(steps[0].tags).toEqual(["spawn:alpha"]);
+    expect(steps[1].tags).toEqual(["spawn:beta"]);
+    expect(steps[2].tags).toEqual([]);
+  });
+
+  // ---- 边界情况 ----
+
+  it("should return empty array for content with no step numbers", () => {
+    const content = [
+      "# Header",
+      "- [ ] Unnumbered step",
+      "Some text",
+    ].join("\n");
+
+    const steps = markdownToSteps(content);
+
+    expect(steps).toEqual([]);
+  });
+
+  it("should return empty array for empty content", () => {
+    expect(markdownToSteps("")).toEqual([]);
+    expect(markdownToSteps("  \n\n  ")).toEqual([]);
   });
 });
 
 // ============================================================================
-// updateProgress
+// calculateProgressFromSteps
 // ============================================================================
 
-describe("updateProgress", () => {
-  it("should update status.yaml progress", () => {
-    // 准备 checklist.md
-    const checklistContent = [
-      "- [x] 1.1 First step done",
-      "- [ ] 1.2 Second step pending",
-      "- [x] 1.3 Third step done",
-      "- [ ] 1.4 Fourth step pending",
-    ].join("\n");
-    writeFileSync(join(tmpDir, "checklist.md"), checklistContent, "utf-8");
+describe("calculateProgressFromSteps", () => {
+  // ---- 正常进度计算 ----
 
+  it("should calculate normal progress correctly", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "pending", completed_at: null, tags: [] },
+      { id: "1.3", text: "C", status: "completed", completed_at: null, tags: [] },
+      { id: "1.4", text: "D", status: "pending", completed_at: null, tags: [] },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    expect(progress).toEqual({
+      total: 4,
+      completed: 2,
+      skipped: 0,
+      current_step: "1.2",
+      percentage: 50,
+    });
+  });
+
+  it("should return 100% when all steps are completed", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "completed", completed_at: null, tags: [] },
+      { id: "1.3", text: "C", status: "completed", completed_at: null, tags: [] },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    expect(progress).toEqual({
+      total: 3,
+      completed: 3,
+      skipped: 0,
+      current_step: "",
+      percentage: 100,
+    });
+  });
+
+  it("should return zero progress for empty steps array", () => {
+    const progress = calculateProgressFromSteps([]);
+
+    expect(progress).toEqual({
+      total: 0,
+      completed: 0,
+      skipped: 0,
+      current_step: "",
+      percentage: 0,
+    });
+  });
+
+  // ---- skipped 单独计数 ----
+
+  it("should count skipped steps separately from completed", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "skipped", completed_at: null, tags: [], skip_reason: "n/a" },
+      { id: "1.3", text: "C", status: "pending", completed_at: null, tags: [] },
+      { id: "1.4", text: "D", status: "skipped", completed_at: null, tags: [], skip_reason: "skip" },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    // skipped counted separately, percentage = completed / total (skipped not in denominator reduction)
+    expect(progress.total).toBe(4);
+    expect(progress.completed).toBe(1);
+    expect(progress.skipped).toBe(2);
+    expect(progress.percentage).toBe(25); // 1/4 = 25%
+    expect(progress.current_step).toBe("1.3");
+  });
+
+  it("should not include skipped in percentage numerator", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "skipped", completed_at: null, tags: [], skip_reason: "skip" },
+      { id: "1.3", text: "C", status: "skipped", completed_at: null, tags: [], skip_reason: "skip" },
+      { id: "1.4", text: "D", status: "completed", completed_at: null, tags: [] },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    // 2 completed out of 4 total = 50%, not 100%
+    expect(progress.completed).toBe(2);
+    expect(progress.skipped).toBe(2);
+    expect(progress.percentage).toBe(50);
+    // No pending step → current_step is ""
+    expect(progress.current_step).toBe("");
+  });
+
+  // ---- current_step ----
+
+  it("should set current_step to the first pending step's id", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "completed", completed_at: null, tags: [] },
+      { id: "1.3", text: "C", status: "pending", completed_at: null, tags: [] },
+      { id: "1.4", text: "D", status: "pending", completed_at: null, tags: [] },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    expect(progress.current_step).toBe("1.3");
+  });
+
+  it("should set current_step to empty string when all done", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "skipped", completed_at: null, tags: [] },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    expect(progress.current_step).toBe("");
+  });
+
+  // ---- 百分比精度 ----
+
+  it("should round percentage to integer", () => {
+    const steps: Step[] = [
+      { id: "1.1", text: "A", status: "completed", completed_at: null, tags: [] },
+      { id: "1.2", text: "B", status: "completed", completed_at: null, tags: [] },
+      { id: "1.3", text: "C", status: "pending", completed_at: null, tags: [] },
+    ];
+
+    const progress = calculateProgressFromSteps(steps);
+
+    // 2/3 = 66.666... → 67
+    expect(progress.percentage).toBe(67);
+  });
+});
+
+// ============================================================================
+// syncStepsToStatus
+// ============================================================================
+
+describe("syncStepsToStatus", () => {
+  it("should write steps and calculated progress to status.yaml", () => {
     // 准备 status.yaml
     const statusData = {
       task_id: "test-task",
@@ -215,90 +492,110 @@ describe("updateProgress", () => {
     };
     writeFileSync(join(tmpDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
 
-    // 执行
-    updateProgress(tmpDir);
+    const steps: Step[] = [
+      { id: "1.1", text: "Step A", status: "completed", completed_at: "2025-01-01T00:00:00.000Z", tags: [] },
+      { id: "1.2", text: "Step B", status: "pending", completed_at: null, tags: [] },
+      { id: "1.3", text: "Step C", status: "completed", completed_at: "2025-01-02T00:00:00.000Z", tags: [] },
+      { id: "1.4", text: "Step D", status: "pending", completed_at: null, tags: [] },
+    ];
 
-    // 验证
+    syncStepsToStatus(tmpDir, steps);
+
     const updated = YAML.parse(
       require("fs").readFileSync(join(tmpDir, "status.yaml"), "utf-8"),
     );
 
+    // steps 应被写入
+    expect(updated.steps).toHaveLength(4);
+    expect(updated.steps[0].id).toBe("1.1");
+    expect(updated.steps[1].id).toBe("1.2");
+
+    // progress 应被计算并写入
     expect(updated.progress).toEqual({
       total: 4,
       completed: 2,
+      skipped: 0,
       current_step: "1.2",
       percentage: 50,
     });
+
+    // 原有字段应保留
+    expect(updated.task_id).toBe("test-task");
+    expect(updated.title).toBe("Test");
+    expect(updated.status).toBe("running");
   });
 
   it("should silently skip when status.yaml does not exist", () => {
-    // 只创建 checklist.md，不创建 status.yaml
-    writeFileSync(join(tmpDir, "checklist.md"), "- [x] 1.1 Done\n", "utf-8");
+    const steps: Step[] = [
+      { id: "1.1", text: "Step", status: "pending", completed_at: null, tags: [] },
+    ];
 
     // 不应抛错
-    expect(() => updateProgress(tmpDir)).not.toThrow();
+    expect(() => syncStepsToStatus(tmpDir, steps)).not.toThrow();
   });
 
-  it("should silently skip when checklist does not exist", () => {
-    // 只创建 status.yaml，不创建 checklist.md
-    writeFileSync(join(tmpDir, "status.yaml"), "task_id: test\n", "utf-8");
-
-    // 不应抛错
-    expect(() => updateProgress(tmpDir)).not.toThrow();
-
-    // status.yaml 应保持不变（progress 未被修改）
-    const content = require("fs").readFileSync(join(tmpDir, "status.yaml"), "utf-8");
-    expect(content).toBe("task_id: test\n");
-  });
-
-  it("should calculate 100% when all steps are checked", () => {
-    writeFileSync(join(tmpDir, "checklist.md"), "- [x] 1.1 Done\n- [x] 1.2 Done\n", "utf-8");
-
-    const statusData = {
-      task_id: "test",
-      progress: { total: 0, completed: 0, current_step: "", percentage: 0 },
-    };
+  it("should handle empty steps array", () => {
+    const statusData = { task_id: "test", progress: {} };
     writeFileSync(join(tmpDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
 
-    updateProgress(tmpDir);
+    syncStepsToStatus(tmpDir, []);
 
     const updated = YAML.parse(
       require("fs").readFileSync(join(tmpDir, "status.yaml"), "utf-8"),
     );
 
+    expect(updated.steps).toEqual([]);
     expect(updated.progress).toEqual({
-      total: 2,
-      completed: 2,
+      total: 0,
+      completed: 0,
+      skipped: 0,
       current_step: "",
-      percentage: 100,
+      percentage: 0,
     });
   });
+});
 
-  it("should only count steps with step numbers in progress", () => {
-    writeFileSync(
-      join(tmpDir, "checklist.md"),
-      [
-        "- [x] 1.1 Numbered step",
-        "- [ ] Unnumbered checkbox step",
-        "- [x] 1.2 Another numbered step",
-      ].join("\n"),
-      "utf-8",
-    );
+// ============================================================================
+// loadStepsFromStatus
+// ============================================================================
 
+describe("loadStepsFromStatus", () => {
+  it("should read steps from status.yaml", () => {
     const statusData = {
-      task_id: "test",
-      progress: { total: 0, completed: 0, current_step: "", percentage: 0 },
+      task_id: "test-task",
+      steps: [
+        { id: "1.1", text: "Step A", status: "completed", completed_at: "2025-01-01T00:00:00.000Z", tags: [] },
+        { id: "1.2", text: "Step B", status: "pending", completed_at: null, tags: ["spawn:setup"] },
+        { id: "1.3", text: "Step C", status: "skipped", completed_at: "2025-01-02T00:00:00.000Z", tags: [], skip_reason: "not needed" },
+      ],
     };
     writeFileSync(join(tmpDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
 
-    updateProgress(tmpDir);
+    const steps = loadStepsFromStatus(tmpDir);
 
-    const updated = YAML.parse(
-      require("fs").readFileSync(join(tmpDir, "status.yaml"), "utf-8"),
-    );
+    expect(steps).toHaveLength(3);
+    expect(steps![0].id).toBe("1.1");
+    expect(steps![0].status).toBe("completed");
+    expect(steps![1].tags).toEqual(["spawn:setup"]);
+    expect(steps![2].skip_reason).toBe("not needed");
+    expect(steps![2].status).toBe("skipped");
+  });
 
-    // 只有带步骤编号的才计入 total（共 2 个，完成 2 个）
-    expect(updated.progress.total).toBe(2);
-    expect(updated.progress.completed).toBe(2);
+  it("should return null when status.yaml does not exist", () => {
+    expect(loadStepsFromStatus(tmpDir)).toBeNull();
+  });
+
+  it("should return null when steps field is missing", () => {
+    const statusData = { task_id: "test-task", status: "running" };
+    writeFileSync(join(tmpDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
+
+    expect(loadStepsFromStatus(tmpDir)).toBeNull();
+  });
+
+  it("should return null when steps is an empty array", () => {
+    const statusData = { task_id: "test-task", steps: [] };
+    writeFileSync(join(tmpDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
+
+    expect(loadStepsFromStatus(tmpDir)).toBeNull();
   });
 });

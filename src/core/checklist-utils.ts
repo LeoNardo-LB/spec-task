@@ -1,32 +1,21 @@
 /**
  * Checklist 解析与操作工具函数。
  *
- * 所有操作均为同步（readFileSync / writeFileSync / existsSync），
- * 因为会被同步 hook 调用。
+ * 核心职责：markdown checklist ↔ 结构化 Step[] 的双向转换。
+ * status.yaml.steps 是步骤状态的唯一权威数据源。
  */
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import YAML from "yaml";
-import type { TaskProgress } from "../types.js";
-
-// ============================================================================
-// 类型
-// ============================================================================
-
-export interface ChecklistStep {
-  checked: boolean;
-  text: string;
-  stepNumber?: string;
-  tag?: string;
-}
+import type { Step, StepStatus, TaskProgress } from "../types.js";
 
 // ============================================================================
 // 常量正则
 // ============================================================================
 
-/** 匹配 checkbox 行：`- [x] ...` 或 `- [ ] ...` */
-const CHECKBOX_REGEX = /^- \[([ x])\]\s*(.+)/;
+/** 匹配 checkbox 行：`- [x] ...`、`- [ ] ...`、`- [-] ...` */
+const CHECKBOX_REGEX = /^- \[([x -])\]\s*(.+)/;
 
 /** 从 checkbox 文本中提取步骤编号（如 "1.1", "1.2.3"） */
 const STEP_PATTERN = /^(\d+(?:\.\d+)+)/;
@@ -34,140 +23,162 @@ const STEP_PATTERN = /^(\d+(?:\.\d+)+)/;
 /** 从文本中提取标签（如 `[spawn:financial-valuation]` → `spawn:financial-valuation`） */
 const TAG_PATTERN = /\[([\w-]+:[\w-]+)\]/;
 
+/** 从文本中提取跳过原因（如 `(数据不可用)` → `数据不可用`） */
+const SKIP_REASON_PATTERN = /\(([^)]+)\)/;
+
 // ============================================================================
-// parseChecklist
+// parseChecklist（扩展支持 [-]）
 // ============================================================================
 
 /**
- * 解析 checklist.md 文本内容，返回 ChecklistStep 数组。
+ * 解析 checklist.md 文本内容，返回 ParsedChecklistStep 数组。
+ * 支持 [x]（completed）、[ ]（pending）、[-]（skipped）。
  */
-export function parseChecklist(content: string): ChecklistStep[] {
+export function parseChecklist(content: string): ParsedChecklistStep[] {
   const lines = content.split("\n");
-  const steps: ChecklistStep[] = [];
+  const steps: ParsedChecklistStep[] = [];
 
   for (const line of lines) {
     const match = line.match(CHECKBOX_REGEX);
     if (!match) continue;
 
-    const checked = match[1] === "x";
+    const marker = match[1].trim();
     const text = match[2].trim();
 
     const stepMatch = text.match(STEP_PATTERN);
     const stepNumber = stepMatch ? stepMatch[1] : undefined;
 
+    // 跳过无步骤编号的 checkbox 行
+    if (!stepNumber) continue;
+
     const tagMatch = text.match(TAG_PATTERN);
     const tag = tagMatch ? tagMatch[1] : undefined;
 
-    steps.push({ checked, text, stepNumber, tag });
+    let status: StepStatus = "pending";
+    if (marker === "x") status = "completed";
+    else if (marker === "-") status = "skipped";
+
+    let skipReason: string | undefined;
+    if (status === "skipped") {
+      const reasonMatch = text.match(SKIP_REASON_PATTERN);
+      skipReason = reasonMatch ? reasonMatch[1] : undefined;
+    }
+
+    steps.push({ stepNumber, text, status, tag, skipReason });
   }
 
   return steps;
 }
 
-// ============================================================================
-// toggleStep
-// ============================================================================
-
-/**
- * 在 checklist 内容中切换指定步骤的 checkbox 状态。
- *
- * @param content  checklist.md 的完整文本
- * @param matchFn  匹配函数，返回 true 时选中该步骤
- * @param checked  目标状态：true 勾选，false 取消勾选
- * @returns { content: string, matched: boolean }
- *   - matched=false：步骤未找到，或当前状态已与目标一致（无需修改）
- *   - matched=true：已修改，content 为新内容
- */
-export function toggleStep(
-  content: string,
-  matchFn: (step: ChecklistStep) => boolean,
-  checked: boolean,
-): { content: string; matched: boolean } {
-  const lines = content.split("\n");
-
-  for (let i = 0; i < lines.length; i++) {
-    const lineMatch = lines[i].match(CHECKBOX_REGEX);
-    if (!lineMatch) continue;
-
-    const currentChecked = lineMatch[1] === "x";
-    const text = lineMatch[2].trim();
-
-    // 构建 ChecklistStep 供 matchFn 判断
-    const stepMatch = text.match(STEP_PATTERN);
-    const stepNumber = stepMatch ? stepMatch[1] : undefined;
-
-    const tagMatch = text.match(TAG_PATTERN);
-    const tag = tagMatch ? tagMatch[1] : undefined;
-
-    const step: ChecklistStep = { checked: currentChecked, text, stepNumber, tag };
-
-    if (!matchFn(step)) continue;
-
-    // 找到匹配的步骤
-    if (currentChecked === checked) {
-      // 状态已一致，无需修改
-      return { content, matched: false };
-    }
-
-    // 用字符串操作修改 checkbox 部分：找到 `- [` 后面的第一个字符
-    const bracketIdx = lines[i].indexOf("[");
-    const newCheckbox = checked ? "x" : " ";
-    lines[i] = lines[i].substring(0, bracketIdx + 1) + newCheckbox + lines[i].substring(bracketIdx + 2);
-
-    return { content: lines.join("\n"), matched: true };
-  }
-
-  // 没有匹配的步骤
-  return { content, matched: false };
+/** parseChecklist 返回的中间结构 */
+export interface ParsedChecklistStep {
+  stepNumber: string;
+  text: string;
+  status: StepStatus;
+  tag?: string;
+  skipReason?: string;
 }
 
 // ============================================================================
-// updateProgress
+// markdownToSteps（markdown → 结构化 Step[]）
 // ============================================================================
 
 /**
- * 同步更新 taskDir 下的 status.yaml 中的 progress 字段。
+ * 将 markdown checklist 文本转换为结构化 Step 数组。
+ * 保留已有步骤的 completed_at（通过 existingSteps 映射）。
  *
- * 读取 checklist.md → 计算进度 → 写入 status.yaml。
- * status.yaml 不存在或 checklist.md 不存在时静默忽略。
+ * @param content        markdown checklist 文本
+ * @param existingSteps  已有的 steps 数组（用于保留 completed_at）
  */
-export function updateProgress(taskDir: string): void {
+export function markdownToSteps(content: string, existingSteps?: Step[]): Step[] {
+  const parsed = parseChecklist(content);
+  const existingMap = new Map<string, Step>();
+  if (existingSteps) {
+    for (const s of existingSteps) {
+      existingMap.set(s.id, s);
+    }
+  }
+
+  const now = new Date().toISOString();
+  return parsed.map(p => {
+    const existing = existingMap.get(p.stepNumber);
+    const tags: string[] = p.tag ? [p.tag] : [];
+
+    return {
+      id: p.stepNumber,
+      text: p.text.replace(STEP_PATTERN, "").replace(TAG_PATTERN, "").replace(SKIP_REASON_PATTERN, "").trim(),
+      status: p.status,
+      completed_at: p.status !== "pending"
+        ? (existing?.completed_at ?? now)
+        : null,
+      tags,
+      ...(p.skipReason ? { skip_reason: p.skipReason } : {}),
+    };
+  });
+}
+
+// ============================================================================
+// calculateProgressFromSteps
+// ============================================================================
+
+/**
+ * 从结构化 Step 数组计算进度。
+ * 不再依赖 markdown 解析。
+ */
+export function calculateProgressFromSteps(steps: Step[]): TaskProgress {
+  const total = steps.length;
+  const completed = steps.filter(s => s.status === "completed").length;
+  const skipped = steps.filter(s => s.status === "skipped").length;
+  const firstPending = steps.find(s => s.status === "pending");
+  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  return { total, completed, skipped, current_step: firstPending?.id ?? "", percentage };
+}
+
+// ============================================================================
+// syncStepsToStatus
+// ============================================================================
+
+/**
+ * 同步更新 taskDir 下 status.yaml 中的 steps 和 progress 字段。
+ * 读取现有 steps 以保留 completed_at，全量替换 steps 数组。
+ * status.yaml 不存在时静默忽略。
+ */
+export function syncStepsToStatus(taskDir: string, steps: Step[]): void {
   try {
     const statusPath = join(taskDir, "status.yaml");
     if (!existsSync(statusPath)) return;
 
-    const checklistPath = join(taskDir, "checklist.md");
-    if (!existsSync(checklistPath)) return;
-
-    // 读取并计算进度
-    const checklistContent = readFileSync(checklistPath, "utf-8");
-    const progress = calculateProgressSync(checklistContent);
-
-    // 读取 status.yaml，更新 progress，写回
     const statusContent = readFileSync(statusPath, "utf-8");
     const statusData = YAML.parse(statusContent) ?? {};
-    statusData.progress = progress;
+    statusData.steps = steps;
+    statusData.progress = calculateProgressFromSteps(steps);
     writeFileSync(statusPath, YAML.stringify(statusData), "utf-8");
   } catch {
     // 静默忽略所有错误
   }
 }
 
+// ============================================================================
+// loadStepsFromStatus
+// ============================================================================
+
 /**
- * 纯同步的 checklist 进度计算。
- * 逻辑与 ProgressCalculator.calculate 保持一致。
+ * 从 status.yaml 读取 steps 数组。
+ * 返回 null 表示 status.yaml 不存在或 steps 字段不存在。
  */
-export function calculateProgressSync(content: string): TaskProgress {
-  const steps = parseChecklist(content);
+export function loadStepsFromStatus(taskDir: string): Step[] | null {
+  try {
+    const statusPath = join(taskDir, "status.yaml");
+    if (!existsSync(statusPath)) return null;
 
-  // 只计算有 stepNumber 的步骤（与 ProgressCalculator 一致）
-  const items = steps.filter((s) => s.stepNumber !== undefined);
+    const statusContent = readFileSync(statusPath, "utf-8");
+    const statusData = YAML.parse(statusContent) ?? {};
+    const steps = statusData.steps;
 
-  const total = items.length;
-  const completed = items.filter((s) => s.checked).length;
-  const firstUnchecked = items.find((s) => !s.checked);
-  const currentStep = firstUnchecked?.stepNumber ?? "";
-  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-  return { total, completed, current_step: currentStep, percentage };
+    if (Array.isArray(steps) && steps.length > 0) return steps;
+    return null;
+  } catch {
+    return null;
+  }
 }

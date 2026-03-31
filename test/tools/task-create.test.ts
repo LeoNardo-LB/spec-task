@@ -71,29 +71,6 @@ describe("executeTaskCreate", () => {
     expect(status.assigned_to).toBe("agent-007");
   });
 
-  it("should update parent's children list when parent is specified", async () => {
-    const parentResult = await executeTaskCreate("tool-4a", {
-      task_name: "parent-task",
-      project_root: tmpDir,
-    });
-    const parentData = parseResult(parentResult.content[0].text);
-    const parentDir = parentData.task_dir;
-
-    const childResult = await executeTaskCreate("tool-4b", {
-      task_name: "child-task",
-      project_root: tmpDir,
-      parent: parentDir,
-    });
-    const childData = parseResult(childResult.content[0].text);
-    expect(childData.success).toBe(true);
-
-    const parentStatus = getStatusYaml(parentDir);
-    expect(parentStatus.children).toContain(childData.task_dir);
-
-    const childStatus = getStatusYaml(childData.task_dir);
-    expect(childStatus.parent).toBe(parentDir);
-  });
-
   it("should handle Unicode task_name", async () => {
     const result = await executeTaskCreate("tool-5", {
       task_name: "数据分析-任务",
@@ -150,19 +127,6 @@ describe("executeTaskCreate", () => {
     expect(data.error).toBe("INVALID_PARAMS");
   });
 
-  it("should set depth parameter correctly", async () => {
-    const result = await executeTaskCreate("tool-10", {
-      task_name: "deep-task",
-      project_root: tmpDir,
-      depth: 3,
-    });
-    const data = parseResult(result.content[0].text);
-    expect(data.success).toBe(true);
-
-    const status = getStatusYaml(data.task_dir);
-    expect(status.depth).toBe(3);
-  });
-
   it("should set correct default values in status.yaml", async () => {
     const result = await executeTaskCreate("tool-11", {
       task_name: "defaults-task",
@@ -172,17 +136,16 @@ describe("executeTaskCreate", () => {
     const status = getStatusYaml(data.task_dir);
 
     expect(status.status).toBe("pending");
-    expect(status.depth).toBe(0);
-    expect(status.parent).toBeNull();
     expect(status.children).toEqual([]);
     expect(status.outputs).toEqual([]);
+    expect(status.steps).toEqual([]);
     expect(status.errors).toEqual([]);
     expect(status.alerts).toEqual([]);
     expect(status.blocked_by).toEqual([]);
     expect(status.started_at).toBeNull();
     expect(status.completed_at).toBeNull();
-    expect(status.progress).toEqual({ total: 0, completed: 0, current_step: "", percentage: 0 });
-    expect(status.timing).toEqual({ estimated_minutes: null, elapsed_minutes: null });
+    expect(status.progress).toEqual({ total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 });
+    expect(status.timing).toEqual({ elapsed_minutes: null });
     expect(status.verification.status).toBe("pending");
     expect(status.verification.criteria).toEqual([]);
   });
@@ -200,8 +163,6 @@ describe("executeTaskCreate", () => {
     expect(status.revisions[0].type).toBe("created");
     expect(status.revisions[0].id).toBe(1);
     expect(status.revisions[0].trigger).toBe("agent-1");
-    expect(status.revisions[0].status_before).toBe("pending");
-    expect(status.revisions[0].status_after).toBe("pending");
     expect(status.revisions[0].timestamp).toBe("2026-03-29T10:00:00.000Z");
   });
 
@@ -241,5 +202,59 @@ describe("executeTaskCreate", () => {
     expect(data.success).toBe(true);
     expect(data.task_dir).toContain("spec-task");
     expect(data.task_dir).toContain("cwd-task");
+  });
+
+  it("should parse checklist into steps array when checklist parameter is provided", async () => {
+    const checklist = `## 1. 数据收集
+- [x] 1.1 收集财务数据 [spawn:financial-valuation]
+- [x] 1.2 获取行业报告
+- [-] 1.3 对比行业均值 (数据不可用)
+- [ ] 2.1 财务估值分析`;
+
+    const result = await executeTaskCreate("tool-16", {
+      task_name: "checklist-task",
+      project_root: tmpDir,
+      checklist,
+    });
+    const data = parseResult(result.content[0].text);
+    const status = getStatusYaml(data.task_dir);
+
+    // checklist.md should be created
+    expect(existsSync(join(data.task_dir, "checklist.md"))).toBe(true);
+    expect(data.created_artifacts).toContain("checklist");
+
+    // steps should be parsed from checklist
+    expect(status.steps).toBeDefined();
+    expect(status.steps.length).toBe(4);
+
+    // Step 1.1: completed with tag
+    expect(status.steps[0].id).toBe("1.1");
+    expect(status.steps[0].status).toBe("completed");
+    expect(status.steps[0].completed_at).not.toBeNull();
+    expect(status.steps[0].tags).toEqual(["spawn:financial-valuation"]);
+
+    // Step 1.2: completed without tag
+    expect(status.steps[1].id).toBe("1.2");
+    expect(status.steps[1].status).toBe("completed");
+
+    // Step 1.3: skipped with skip_reason
+    expect(status.steps[2].id).toBe("1.3");
+    expect(status.steps[2].status).toBe("skipped");
+    expect(status.steps[2].skip_reason).toBe("数据不可用");
+    expect(status.steps[2].completed_at).not.toBeNull();
+
+    // Step 2.1: pending
+    expect(status.steps[3].id).toBe("2.1");
+    expect(status.steps[3].status).toBe("pending");
+    expect(status.steps[3].completed_at).toBeNull();
+
+    // progress should be calculated from steps
+    expect(status.progress).toEqual({
+      total: 4,
+      completed: 2,
+      skipped: 1,
+      current_step: "2.1",
+      percentage: 50,
+    });
   });
 });

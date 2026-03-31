@@ -61,8 +61,12 @@ describe("executeChecklistWrite", () => {
 
     expect(statusData.progress.total).toBe(3);
     expect(statusData.progress.completed).toBe(1);
+    expect(statusData.progress.skipped).toBe(0);
     expect(statusData.progress.percentage).toBe(33);
     expect(statusData.progress.current_step).toBe("1.2");
+    // checklist_write also updates status.yaml.steps
+    expect(statusData.steps).toBeDefined();
+    expect(Array.isArray(statusData.steps)).toBe(true);
   });
 
   it("should silently skip progress update when status.yaml does not exist", async () => {

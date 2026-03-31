@@ -1,4 +1,3 @@
-import { join } from "path";
 import type {
   TaskTransitionParams,
   TaskTransitionResult,
@@ -7,8 +6,8 @@ import type {
 } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { StateMachine } from "../core/state-machine.js";
-import { ProgressCalculator } from "../core/progress.js";
 import { RevisionBuilder } from "../core/revision.js";
+import { calculateProgressFromSteps } from "../core/checklist-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskTransitionParamsSchema = {
@@ -24,30 +23,9 @@ export const TaskTransitionParamsSchema = {
     revision_type: { type: "string", description: "Revision type (default: 'status_change')" },
     trigger: { type: "string", description: "Who triggered the transition" },
     summary: { type: "string", description: "Transition summary" },
-    impact: { type: "string", enum: ["minor", "major", "full_reset"], description: "Impact level" },
-    resume_from: { type: "string", description: "Resume point step" },
     block_type: { type: "string", enum: ["soft_block", "hard_block"], description: "Block type" },
     block_reason: { type: "string", description: "Block reason" },
     assigned_to: { type: "string", description: "Reassign to agent" },
-    changes: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          artifact: { type: "string" },
-          action: { type: "string" },
-          detail: { type: "string" },
-        },
-      },
-    },
-    affected_steps: {
-      type: "object",
-      properties: {
-        invalidated: { type: "array", items: { type: "string" } },
-        modified: { type: "array", items: { type: "string" } },
-        added: { type: "array", items: { type: "string" } },
-      },
-    },
   },
 };
 
@@ -63,7 +41,6 @@ export async function executeTaskTransition(
   const store = new StatusStore();
   const sm = new StateMachine();
   const rb = new RevisionBuilder();
-  const pc = new ProgressCalculator();
 
   // 1. 锁外预检
   let currentData: TaskStatusData;
@@ -88,15 +65,15 @@ export async function executeTaskTransition(
       if (newStatus === "completed" || newStatus === "cancelled")
         data.completed_at = new Date().toISOString();
 
-      // 自动计算 elapsed_minutes（等价于 v1.0）
+      // 自动计算 elapsed_minutes
       if ((newStatus === "completed" || newStatus === "cancelled") && data.started_at) {
         const startMs = new Date(data.started_at).getTime();
         const endMs = Date.now();
         data.timing.elapsed_minutes = Math.round((endMs - startMs) / 60000);
       }
 
-      // 进度
-      data.progress = await pc.calculate(join(task_dir, "checklist.md"));
+      // 从 steps 计算进度
+      data.progress = calculateProgressFromSteps(data.steps ?? []);
 
       // Revision（running→running 跳过）
       let revisionId = -1;
@@ -105,11 +82,8 @@ export async function executeTaskTransition(
           data, type: (revisionOpts.revision_type as RevisionType) ?? "status_change",
           trigger: revisionOpts.trigger ?? "agent",
           summary: revisionOpts.summary ?? `${oldStatus} → ${newStatus}`,
-          impact: revisionOpts.impact, changes: revisionOpts.changes,
-          affectedSteps: revisionOpts.affected_steps, resumeFrom: revisionOpts.resume_from,
           blockType: revisionOpts.block_type, blockReason: revisionOpts.block_reason,
         });
-        rev.status_before = oldStatus; rev.status_after = newStatus;
         data.revisions.push(rev);
         revisionId = rev.id;
       }

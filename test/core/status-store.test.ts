@@ -53,12 +53,11 @@ describe("StatusStore", () => {
       assigned_to: "agent-1",
       started_at: null,
       completed_at: null,
-      progress: { total: 5, completed: 0, current_step: "1.1", percentage: 0 },
-      parent: null,
-      depth: 0,
+      progress: { total: 5, completed: 0, skipped: 0, current_step: "1.1", percentage: 0 },
       children: [],
       outputs: [],
-      timing: { estimated_minutes: 30, elapsed_minutes: null },
+      steps: [],
+      timing: { elapsed_minutes: null },
       errors: [],
       alerts: [],
       blocked_by: [],
@@ -216,7 +215,7 @@ describe("StatusStore", () => {
       writeYaml(path, nested);
       const data = await store.loadYaml<typeof nested>(path);
       expect(data.level1.level2.level3.value).toBe("deep");
-      expect(data.level1.level2.level3.array[2].nested).toBe(true);
+      expect((data.level1.level2.level3.array[2] as { nested: boolean }).nested).toBe(true);
       expect(data.level1.siblings).toEqual(["a", "b"]);
     });
 
@@ -421,7 +420,7 @@ describe("StatusStore", () => {
       writeYaml(statusPath(), sampleData());
       await expect(
         store.transaction(tmpDir, (data) => {
-          data.status = "corrupted";
+          data.status = "running";
           throw new Error("callback error");
         })
       ).rejects.toThrow("callback error");
@@ -462,12 +461,6 @@ describe("StatusStore", () => {
           timestamp: new Date().toISOString(),
           trigger: "test",
           summary: "status changed to running",
-          impact: "minor",
-          changes: [],
-          affected_steps: { invalidated: [], modified: [], added: [] },
-          resume_from: "",
-          status_before: "pending",
-          status_after: "running",
           block_type: null,
           block_reason: null,
         });
@@ -662,7 +655,7 @@ revisions: []
       expect(loaded.status).toBe("pending");
       expect(loaded.progress.total).toBe(10);
       expect(loaded.progress.percentage).toBe(0);
-      expect(loaded.timing.estimated_minutes).toBe(60);
+      expect((loaded.timing as unknown as Record<string, unknown>).estimated_minutes).toBe(60);
       expect(loaded.started_at).toBeNull();
       expect(loaded.revisions).toHaveLength(0);
     });
@@ -701,12 +694,6 @@ revisions: []
           timestamp: new Date().toISOString(),
           trigger: "test",
           summary: `revision ${i}`,
-          impact: "minor" as const,
-          changes: [],
-          affected_steps: { invalidated: [], modified: [], added: [] },
-          resume_from: "",
-          status_before: "pending" as const,
-          status_after: "running" as const,
           block_type: null,
           block_reason: null,
         });
@@ -736,12 +723,6 @@ revisions: []
           timestamp: new Date().toISOString(),
           trigger: "test",
           summary: `revision ${i}`,
-          impact: "minor" as const,
-          changes: [],
-          affected_steps: { invalidated: [], modified: [], added: [] },
-          resume_from: "",
-          status_before: "pending" as const,
-          status_after: "running" as const,
           block_type: null,
           block_reason: null,
         });

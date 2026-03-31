@@ -10,19 +10,18 @@ export type RevisionType =
   | "created" | "user_request" | "auto_adapt"
   | "verify_retry" | "cancel" | "status_change";
 
-export type ImpactLevel = "minor" | "major" | "full_reset";
-
 export type BlockType = "soft_block" | "hard_block";
 
 export type VerificationStatus = "pending" | "passed" | "failed";
-
-export type ArtifactAction = "added" | "modified" | "removed";
 
 export type ArtifactName = "brief" | "spec" | "plan" | "checklist";
 
 export type TrackingLevel = "low" | "medium" | "high";
 
 export type DetectorLevel = "none" | "empty" | "skeleton" | "in_progress" | "all_done";
+
+/** 步骤状态 */
+export type StepStatus = "pending" | "completed" | "skipped";
 
 // ============================================================================
 // 状态机合法转换（14 条）
@@ -48,15 +47,25 @@ export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
 // 核心数据结构
 // ============================================================================
 
+/** 结构化步骤（status.yaml.steps 数组元素） */
+export interface Step {
+  id: string;
+  text: string;
+  status: StepStatus;
+  completed_at: string | null;
+  tags: string[];
+  skip_reason?: string;
+}
+
 export interface TaskProgress {
   total: number;
   completed: number;
+  skipped: number;
   current_step: string;
   percentage: number;
 }
 
 export interface TaskTiming {
-  estimated_minutes: number | null;
   elapsed_minutes: number | null;
 }
 
@@ -92,30 +101,12 @@ export interface Verification {
   verified_by: string | null;
 }
 
-export interface RevisionChange {
-  artifact: ArtifactName;
-  action: ArtifactAction;
-  detail: string;
-}
-
-export interface AffectedSteps {
-  invalidated: string[];
-  modified: string[];
-  added: string[];
-}
-
 export interface Revision {
   id: number;
   type: RevisionType;
   timestamp: string;
   trigger: string;
   summary: string;
-  impact: ImpactLevel;
-  changes: RevisionChange[];
-  affected_steps: AffectedSteps;
-  resume_from: string;
-  status_before: TaskStatus;
-  status_after: TaskStatus;
   block_type: BlockType | null;
   block_reason: string | null;
 }
@@ -134,10 +125,9 @@ export interface TaskStatusData {
   started_at: string | null;
   completed_at: string | null;
   progress: TaskProgress;
-  parent: string | null;
-  depth: number;
   children: string[];
   outputs: string[];
+  steps: Step[];
   timing: TaskTiming;
   errors: ErrorRecord[];
   alerts: AlertRecord[];
@@ -204,8 +194,6 @@ export interface TaskCreateParams {
   project_root?: string;
   title?: string;
   assigned_to?: string;
-  parent?: string;
-  depth?: number;
   brief?: string;
   plan?: string;
   checklist?: string;
@@ -217,13 +205,9 @@ export interface TaskTransitionParams {
   revision_type?: string;
   trigger?: string;
   summary?: string;
-  impact?: ImpactLevel;
-  resume_from?: string;
   block_type?: BlockType;
   block_reason?: string;
   assigned_to?: string;
-  changes?: RevisionChange[];
-  affected_steps?: AffectedSteps;
 }
 
 export type TaskLogAction =
@@ -231,7 +215,7 @@ export type TaskLogAction =
   | { action: "alert"; type: string; message: string }
   | { action: "add-block"; task: string; reason: string }
   | { action: "remove-block"; task: string }
-  | { action: "output"; path: string }
+  | { action: "output"; path?: string }
   | { action: "retry"; step: string };
 
 export interface TaskLogParams {
@@ -295,8 +279,9 @@ export interface TaskTransitionResult extends ToolResult {
 }
 
 export interface ChecklistReadResult extends ToolResult {
-  content: string;
+  steps: Step[];
   progress: TaskProgress;
+  content: string | null;
   checklist_path: string;
 }
 
@@ -352,5 +337,3 @@ export const CONTEXT_FILES = [
   "README.md",
   "CLAUDE.md",
 ] as const;
-
-

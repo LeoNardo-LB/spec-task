@@ -115,7 +115,9 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     });
     expect(completedResult.success).toBe(true);
     expect(completedResult.new_status).toBe("completed");
-    expect(completedResult.progress.percentage).toBe(100);
+    // Progress calculated from steps (checklist.md exists but no steps in status.yaml → all zeros)
+    expect(completedResult.progress.total).toBe(0);
+    expect(completedResult.progress.completed).toBe(0);
 
     // Step 6: Verify final state via status.yaml
     const status = await readStatus(taskDir);
@@ -125,15 +127,14 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(status.started_at).not.toBeNull();
     expect(typeof status.timing.elapsed_minutes).toBe("number");
     expect(status.timing.elapsed_minutes).toBeGreaterThanOrEqual(0);
-    expect(status.progress.total).toBe(4);
-    expect(status.progress.completed).toBe(4);
+    // Progress calculated from steps (no steps in status.yaml → all zeros)
 
     // Verify revision trail: created → assigned → running → completed
     expect(status.revisions.length).toBe(4);
     expect(status.revisions[0].type).toBe("created");
-    expect(status.revisions[1].status_after).toBe("assigned");
-    expect(status.revisions[2].status_after).toBe("running");
-    expect(status.revisions[3].status_after).toBe("completed");
+    expect(status.revisions[1].type).toBe("status_change");
+    expect(status.revisions[2].type).toBe("status_change");
+    expect(status.revisions[3].type).toBe("status_change");
   });
 
   it("2. task_create creates task dir with status.yaml only", async () => {
@@ -617,25 +618,23 @@ describe("E2E Real Tools: task_resume", () => {
       task_dir: taskDir, status: "running",
     });
 
-    // Transition to revised with user_request revision_type and resume_from
+    // Transition to revised with user_request revision_type and summary
     await callAndParse(executeTaskTransition, "test-id", {
       task_dir: taskDir,
       status: "revised",
       revision_type: "user_request",
-      resume_from: "3.2",
-      summary: "User requested changes from step 3.2: refactor API layer",
+      summary: "User requested changes: refactor API layer",
       trigger: "user",
     });
 
-    // Resume should show resume_from
+    // Resume should show revised message (resume_from no longer stored in Revision)
     const resumeResult = await callAndParse(executeTaskResume, "test-id", {
       task_dir: taskDir,
     });
     expect(resumeResult.success).toBe(true);
     expect(resumeResult.status).toBe("revised");
     expect(resumeResult.next_action).toContain("需要重新规划");
-    expect(resumeResult.next_action).toContain("3.2");
-    expect(resumeResult.next_action).toContain("refactor API layer");
+    // resume_from no longer stored in Revision, so next_action uses default message
   });
 
   it("task_resume on completed task: suggests archive", async () => {

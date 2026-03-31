@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import YAML from "yaml";
 import { executeChecklistRead } from "../../src/tools/checklist-read.js";
 
 describe("executeChecklistRead", () => {
@@ -50,10 +51,13 @@ describe("executeChecklistRead", () => {
     expect(data.success).toBe(true);
     expect(data.content).toBe(SAMPLE_CHECKLIST);
     expect(data.checklist_path).toContain("checklist.md");
+    expect(data.steps).toBeDefined();
+    expect(Array.isArray(data.steps)).toBe(true);
 
     // 进度统计：只计算有编号的步骤（6个）
     expect(data.progress.total).toBe(6);
     expect(data.progress.completed).toBe(2);
+    expect(data.progress.skipped).toBe(0);
     expect(data.progress.percentage).toBe(33);
     expect(data.progress.current_step).toBe("1.2");
   });
@@ -65,7 +69,6 @@ describe("executeChecklistRead", () => {
 
     expect(data.success).toBe(false);
     expect(data.error).toBe("CHECKLIST_NOT_FOUND");
-    expect(data.message).toContain("checklist.md not found");
   });
 
   it("should return error when task_dir is empty", async () => {
@@ -89,10 +92,9 @@ describe("executeChecklistRead", () => {
     const result = await executeChecklistRead("cl-1", { task_dir: taskDir });
     const data = parseResult(result.content[0].text);
 
-    expect(data.success).toBe(true);
-    expect(data.progress.total).toBe(0);
-    expect(data.progress.completed).toBe(0);
-    expect(data.progress.percentage).toBe(0);
+    // steps 不存在或为空 → CHECKLIST_NOT_FOUND
+    expect(data.success).toBe(false);
+    expect(data.error).toBe("CHECKLIST_NOT_FOUND");
   });
 
   it("should handle all steps completed", async () => {
@@ -104,7 +106,47 @@ describe("executeChecklistRead", () => {
     expect(data.success).toBe(true);
     expect(data.progress.total).toBe(3);
     expect(data.progress.completed).toBe(3);
+    expect(data.progress.skipped).toBe(0);
     expect(data.progress.percentage).toBe(100);
     expect(data.progress.current_step).toBe("");
+  });
+
+  it("should auto-migrate when status.yaml has no steps but checklist.md exists", async () => {
+    // Create a minimal status.yaml without steps field
+    const minimalStatus = {
+      task_id: "test-task",
+      title: "test",
+      created: "2026-03-30T10:00:00.000Z",
+      updated: "2026-03-30T10:00:00.000Z",
+      status: "running",
+      assigned_to: "agent",
+      started_at: null,
+      completed_at: null,
+      progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
+      children: [],
+      outputs: [],
+      steps: [],
+      timing: { elapsed_minutes: null },
+      errors: [],
+      alerts: [],
+      blocked_by: [],
+      verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
+      revisions: [],
+    };
+    writeFileSync(join(taskDir, "status.yaml"), YAML.stringify(minimalStatus), "utf-8");
+
+    // checklist.md should still exist from beforeEach
+    const result = await executeChecklistRead("cl-1", { task_dir: taskDir });
+    const data = parseResult(result.content[0].text);
+
+    expect(data.success).toBe(true);
+    expect(data.steps).toBeDefined();
+    expect(data.steps.length).toBeGreaterThan(0);
+
+    // Verify migration: status.yaml should now have steps populated from checklist.md
+    const updatedStatus = YAML.parse(readFileSync(join(taskDir, "status.yaml"), "utf-8"));
+    expect(updatedStatus.steps).toBeDefined();
+    expect(updatedStatus.steps.length).toBeGreaterThan(0);
+    expect(updatedStatus.progress.total).toBe(updatedStatus.steps.length);
   });
 });

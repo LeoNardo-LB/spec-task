@@ -1,7 +1,7 @@
 import { join } from "path";
 import { writeFile, mkdir } from "fs/promises";
 import type { ChecklistWriteParams, ChecklistWriteResult } from "../types.js";
-import { updateProgress } from "../core/checklist-utils.js";
+import { markdownToSteps, syncStepsToStatus, loadStepsFromStatus } from "../core/checklist-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const ChecklistWriteParamsSchema = {
@@ -14,7 +14,7 @@ export const ChecklistWriteParamsSchema = {
     },
     content: {
       type: "string",
-      description: "完整的 checklist markdown 内容。全量覆盖 checklist.md，传入什么就存什么。包含 checkbox 的行会自动被解析用于进度计算。",
+      description: "完整的 checklist markdown 内容。全量覆盖 checklist.md，传入什么就存什么。支持 `[x]` 完成、`[ ]` 待完成、`[-] 跳过 (原因)` 三种标记。",
     },
   },
 };
@@ -22,8 +22,8 @@ export const ChecklistWriteParamsSchema = {
 /**
  * checklist_write 工具实现。
  *
- * 全量覆盖 checklist.md + 自动更新 status.yaml 进度。
- * 不做格式校验，LLM 拥有完全自由度。
+ * 全量覆盖 checklist.md + 解析为 steps 更新 status.yaml。
+ * status.yaml.steps 是步骤状态的唯一权威数据源。
  */
 export async function executeChecklistWrite(
   _id: string,
@@ -48,11 +48,17 @@ export async function executeChecklistWrite(
     return formatError("INVALID_PARAMS", `task_dir does not exist and cannot be created: ${task_dir}`);
   }
 
-  // 3. 写入 checklist.md（全量覆盖）
+  // 3. 读取已有 steps（保留 completed_at）
+  const existingSteps = loadStepsFromStatus(task_dir);
+
+  // 4. 解析 markdown → 结构化 steps
+  const steps = markdownToSteps(content, existingSteps ?? undefined);
+
+  // 5. 写入 checklist.md（全量覆盖）
   await writeFile(checklistPath, content, "utf-8");
 
-  // 4. 自动更新 status.yaml 进度（静默失败）
-  updateProgress(task_dir);
+  // 6. 同步更新 status.yaml.steps + progress（静默失败）
+  syncStepsToStatus(task_dir, steps);
 
   return formatResult({
     success: true,

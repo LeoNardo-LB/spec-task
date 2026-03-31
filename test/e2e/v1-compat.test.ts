@@ -7,7 +7,7 @@ import { executeTaskVerify } from "../../src/tools/task-verify.js";
 import { executeTaskResume } from "../../src/tools/task-resume.js";
 import { executeTaskArchive } from "../../src/tools/task-archive.js";
 import { createTestEnv } from "./helpers.js";
-import type { TaskStatus, TaskStatusData, AffectedSteps } from "../../src/types.js";
+import type { TaskStatus, TaskStatusData } from "../../src/types.js";
 
 // ============================================================================
 // Helpers
@@ -126,25 +126,14 @@ function parseResponse(response: { content: Array<{ type: string; text: string }
   return JSON.parse(response.content[0].text);
 }
 
-/** 验证 affected_steps 是 v1.0 的空对象格式 */
-function expectV10EmptyAffectedSteps(rev: any): void {
-  // v1.0 格式: affected_steps 为 {} 空对象，没有 invalidated/modified/added 键
-  expect(rev.affected_steps).toBeDefined();
-  expect(rev.affected_steps).toEqual({});
-  expect(rev.affected_steps).not.toHaveProperty("invalidated");
-  expect(rev.affected_steps).not.toHaveProperty("modified");
-  expect(rev.affected_steps).not.toHaveProperty("added");
-}
-
-/** 验证 affected_steps 是 v2.0 的完整格式 */
-function expectV20FullAffectedSteps(rev: any): void {
-  expect(rev.affected_steps).toBeDefined();
-  expect(rev.affected_steps).toHaveProperty("invalidated");
-  expect(rev.affected_steps).toHaveProperty("modified");
-  expect(rev.affected_steps).toHaveProperty("added");
-  expect(rev.affected_steps.invalidated).toEqual([]);
-  expect(rev.affected_steps.modified).toEqual([]);
-  expect(rev.affected_steps.added).toEqual([]);
+/** 验证 revision 包含 v1.0 的核心字段 */
+function expectV10RevisionFields(rev: any): void {
+  expect(rev).toBeDefined();
+  expect(rev.id).toBeDefined();
+  expect(rev.type).toBeDefined();
+  expect(rev.trigger).toBeDefined();
+  expect(rev.summary).toBeDefined();
+  expect(rev.timestamp).toBeDefined();
 }
 
 // ============================================================================
@@ -177,8 +166,6 @@ describe("E2E: v1.0 Compatibility", () => {
     expect(data.title).toBe("最终端到端验证");
     expect(data.status).toBe("completed");
     expect(data.assigned_to).toBe("main");
-    expect(data.parent).toBeNull();
-    expect(data.depth).toBe(0);
     expect(data.children).toEqual([]);
     expect(data.outputs).toHaveLength(1);
     expect(data.outputs[0]).toContain("repeater.py");
@@ -191,7 +178,6 @@ describe("E2E: v1.0 Compatibility", () => {
 
     // v1.0 浮点 elapsed_minutes
     expect(data.timing.elapsed_minutes).toBe(0.1);
-    expect(data.timing.estimated_minutes).toBeNull();
 
     // v1.0 验证数据
     expect(data.verification.status).toBe("passed");
@@ -200,9 +186,9 @@ describe("E2E: v1.0 Compatibility", () => {
     expect(data.verification.criteria[0].result).toBe("passed");
     expect(data.verification.verified_by).toBe("main");
 
-    // v1.0 revision 中的 affected_steps 为 {}
+    // v1.0 revision 核心字段
     expect(data.revisions).toHaveLength(1);
-    expectV10EmptyAffectedSteps(data.revisions[0]);
+    expectV10RevisionFields(data.revisions[0]);
   });
 
   // -------------------------------------------------------------------------
@@ -218,7 +204,7 @@ describe("E2E: v1.0 Compatibility", () => {
     expect(originalData.status).toBe("pending");
     expect(originalData.timing.elapsed_minutes).toBe(0.5);
     expect(originalData.revisions).toHaveLength(1);
-    expectV10EmptyAffectedSteps(originalData.revisions[0]);
+    expectV10RevisionFields(originalData.revisions[0]);
 
     // 执行 pending → assigned 转换
     const result = await executeTaskTransition("compat-t2", {
@@ -236,14 +222,11 @@ describe("E2E: v1.0 Compatibility", () => {
     const afterData = await store.loadStatus(taskDir);
     expect(afterData.revisions).toHaveLength(2);
 
-    // 原始 revision 仍然保持 v1.0 空对象格式
-    expectV10EmptyAffectedSteps(afterData.revisions[0]);
+    // 原始 revision 核心字段
+    expectV10RevisionFields(afterData.revisions[0]);
 
-    // 新创建的 revision 使用 v2.0 完整格式
-    expectV20FullAffectedSteps(afterData.revisions[1]);
+    // 新创建的 revision 核心字段
     expect(afterData.revisions[1].type).toBe("status_change");
-    expect(afterData.revisions[1].status_before).toBe("pending");
-    expect(afterData.revisions[1].status_after).toBe("assigned");
   });
 
   // -------------------------------------------------------------------------
@@ -304,7 +287,7 @@ describe("E2E: v1.0 Compatibility", () => {
 
     // 验证 revisions 包含 v1.0 原始数据
     expect(parsed.revisions).toHaveLength(1);
-    expect(parsed.revisions[0].affected_steps).toEqual({});
+    expectV10RevisionFields(parsed.revisions[0]);
   });
 
   // -------------------------------------------------------------------------
@@ -352,7 +335,7 @@ describe("E2E: v1.0 Compatibility", () => {
     expect(loaded.timing.elapsed_minutes).toBe(0.1);
     expect(loaded.verification.status).toBe("passed");
     expect(loaded.revisions).toHaveLength(1);
-    expectV10EmptyAffectedSteps(loaded.revisions[0]);
+    expectV10RevisionFields(loaded.revisions[0]);
 
     // Step 2: Save (auto-updates `updated` timestamp)
     const originalUpdated = loaded.updated;
@@ -366,8 +349,6 @@ describe("E2E: v1.0 Compatibility", () => {
     expect(reloaded.title).toBe(loaded.title);
     expect(reloaded.status).toBe(loaded.status);
     expect(reloaded.assigned_to).toBe(loaded.assigned_to);
-    expect(reloaded.parent).toBe(loaded.parent);
-    expect(reloaded.depth).toBe(loaded.depth);
     expect(reloaded.children).toEqual(loaded.children);
     expect(reloaded.outputs).toEqual(loaded.outputs);
 
@@ -383,7 +364,6 @@ describe("E2E: v1.0 Compatibility", () => {
 
     // 浮点 elapsed_minutes 保持不变
     expect(reloaded.timing.elapsed_minutes).toBe(0.1);
-    expect(reloaded.timing.estimated_minutes).toBeNull();
 
     // 验证数据
     expect(reloaded.verification.status).toBe(loaded.verification.status);
@@ -394,12 +374,11 @@ describe("E2E: v1.0 Compatibility", () => {
     expect(reloaded.verification.verified_at).toBe(loaded.verification.verified_at);
     expect(reloaded.verification.verified_by).toBe(loaded.verification.verified_by);
 
-    // Revisions（含 v1.0 affected_steps）
+    // Revisions（核心字段）
     expect(reloaded.revisions).toHaveLength(1);
     expect(reloaded.revisions[0].id).toBe(1);
     expect(reloaded.revisions[0].type).toBe("created");
     expect(reloaded.revisions[0].trigger).toBe("task_creation");
-    expect(reloaded.revisions[0].affected_steps).toEqual({});
 
     // 其他数组字段
     expect(reloaded.errors).toEqual(loaded.errors);
@@ -474,8 +453,8 @@ revisions:
     const store = new StatusStore();
     const before = await store.loadStatus(taskDir);
     expect(before.revisions).toHaveLength(2);
-    expectV10EmptyAffectedSteps(before.revisions[0]);
-    expectV10EmptyAffectedSteps(before.revisions[1]);
+    expectV10RevisionFields(before.revisions[0]);
+    expectV10RevisionFields(before.revisions[1]);
 
     // 执行转换
     await executeTaskTransition("compat-t7", {
@@ -487,11 +466,11 @@ revisions:
     const after = await store.loadStatus(taskDir);
     expect(after.revisions).toHaveLength(3);
 
-    // 两个原始 v1.0 revision 保持 {} 格式
-    expectV10EmptyAffectedSteps(after.revisions[0]);
-    expectV10EmptyAffectedSteps(after.revisions[1]);
+    // 两个原始 v1.0 revision 核心字段
+    expectV10RevisionFields(after.revisions[0]);
+    expectV10RevisionFields(after.revisions[1]);
 
-    // 新 revision 使用 v2.0 完整格式
-    expectV20FullAffectedSteps(after.revisions[2]);
+    // 新 revision 核心字段
+    expect(after.revisions[2].type).toBe("status_change");
   });
 });

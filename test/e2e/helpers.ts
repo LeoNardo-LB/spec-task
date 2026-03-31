@@ -2,7 +2,7 @@ import { mkdir, rm, readFile, writeFile, stat } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import YAML from "yaml";
-import type { TaskStatusData, TaskStatus, RevisionType, ArtifactName, ArtifactAction, RevisionChange } from "../../src/types.js";
+import type { TaskStatusData, TaskStatus, RevisionType } from "../../src/types.js";
 
 // Re-export expect for type-safe assertions in test helpers
 import { expect } from "vitest";
@@ -52,8 +52,7 @@ export const writeChecklist = writeFile_;
 export async function transitionTask(
   taskDir: string, newStatus: TaskStatus,
   opts: { summary?: string; revisionType?: string; trigger?: string;
-    assignedTo?: string; blockType?: "soft_block" | "hard_block"; blockReason?: string;
-    changes?: Array<{ artifact: ArtifactName; action: ArtifactAction; detail: string }> } = {}
+    assignedTo?: string; blockType?: "soft_block" | "hard_block"; blockReason?: string } = {}
 ): Promise<void> {
   const content = await readFile(join(taskDir, "status.yaml"), "utf-8");
   const data = YAML.parse(content) as TaskStatusData;
@@ -69,10 +68,7 @@ export async function transitionTask(
   data.revisions.push({
     id: revId, type: (opts.revisionType ?? "status_change") as RevisionType,
     timestamp: data.updated, trigger: opts.trigger ?? "e2e-test",
-    summary: opts.summary ?? `${oldStatus} → ${newStatus}`, impact: "minor",
-    changes: (opts.changes ?? []).map(c => ({ artifact: c.artifact, action: c.action, detail: c.detail } as RevisionChange)),
-    affected_steps: { invalidated: [], modified: [], added: [] }, resume_from: "",
-    status_before: oldStatus, status_after: newStatus,
+    summary: opts.summary ?? `${oldStatus} → ${newStatus}`,
     block_type: opts.blockType ?? null, block_reason: opts.blockReason ?? null,
   });
   await writeFile(join(taskDir, "status.yaml"), YAML.stringify(data), "utf-8");
@@ -134,9 +130,7 @@ export async function finalizeVerification(
       ? Math.max(...data.revisions.map((r: any) => r.id)) + 1 : 1;
     data.revisions.push({
       id: revId, type: "status_change", timestamp: data.updated, trigger: "task_verify",
-      summary: "Auto-completed: all verification criteria passed", impact: "minor",
-      changes: [], affected_steps: { invalidated: [], modified: [], added: [] },
-      resume_from: "", status_before: "running", status_after: "completed",
+      summary: "Auto-completed: all verification criteria passed",
       block_type: null, block_reason: null,
     });
   }
@@ -147,7 +141,7 @@ export async function finalizeVerification(
 /** 创建任务（模拟 task_create） */
 export async function createTask(
   specTaskDir: string, taskName: string,
-  opts: { title?: string; assignedTo?: string; parent?: string; depth?: number } = {}
+  opts: { title?: string; assignedTo?: string } = {}
 ): Promise<{ taskDir: string; taskId: string }> {
   const taskDir = join(specTaskDir, taskName);
   await mkdir(taskDir, { recursive: true });
@@ -156,25 +150,17 @@ export async function createTask(
     task_id: taskName, title: opts.title ?? taskName, created: now, updated: now,
     status: "pending", assigned_to: opts.assignedTo ?? "",
     started_at: null, completed_at: null,
-    progress: { total: 0, completed: 0, current_step: "", percentage: 0 },
-    parent: opts.parent ?? null, depth: opts.depth ?? 0, children: [], outputs: [],
-    timing: { estimated_minutes: null, elapsed_minutes: null },
+    progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
+    children: [], outputs: [], steps: [],
+    timing: { elapsed_minutes: null },
     errors: [], alerts: [], blocked_by: [],
     verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
     revisions: [{
       id: 1, type: "created", timestamp: now, trigger: opts.assignedTo ?? "e2e-test",
-      summary: "Task created", impact: "minor", changes: [],
-      affected_steps: { invalidated: [], modified: [], added: [] }, resume_from: "",
-      status_before: "pending", status_after: "pending", block_type: null, block_reason: null,
+      summary: "Task created", block_type: null, block_reason: null,
     }],
   };
   await writeFile(join(taskDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
-  if (opts.parent) {
-    const pContent = await readFile(join(opts.parent, "status.yaml"), "utf-8");
-    const pData = YAML.parse(pContent) as TaskStatusData;
-    if (!pData.children.includes(taskDir)) pData.children.push(taskDir);
-    await writeFile(join(opts.parent, "status.yaml"), YAML.stringify(pData), "utf-8");
-  }
   return { taskDir, taskId: taskName };
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from "fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import YAML from "yaml";
@@ -23,6 +23,36 @@ function makeChecklist(total: number, completed: number): string {
     lines.push(`- [${checked}] ${i}.1 步骤 ${i}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * 从 checklist 内容生成对应的 steps 数组。
+ */
+function makeSteps(total: number, completed: number): Array<{ id: string; text: string; status: string; completed_at: string | null; tags: string[] }> {
+  const steps: Array<{ id: string; text: string; status: string; completed_at: string | null; tags: string[] }> = [];
+  const now = new Date().toISOString();
+  for (let i = 1; i <= total; i++) {
+    steps.push({
+      id: `${i}.1`,
+      text: `步骤 ${i}`,
+      status: i <= completed ? "completed" : "pending",
+      completed_at: i <= completed ? now : null,
+      tags: [],
+    });
+  }
+  return steps;
+}
+
+/**
+ * 更新 status.yaml 以包含 steps 数组。
+ * hook 现在从 status.yaml.steps 读取进度，而不仅仅是从 checklist.md 解析。
+ */
+function updateStatusWithSteps(taskDir: string, total: number, completed: number): void {
+  const statusPath = join(taskDir, "status.yaml");
+  const content = readFileSync(statusPath, "utf-8");
+  const data = YAML.parse(content) ?? {};
+  data.steps = makeSteps(total, completed);
+  writeFileSync(statusPath, YAML.stringify(data), "utf-8");
 }
 
 describe("createPromptBuildHandler", () => {
@@ -142,13 +172,14 @@ describe("createPromptBuildHandler", () => {
     writeFileSync(join(taskDir, "brief.md"), "# Brief", "utf-8");
     // 默认 requiredArtifacts=["checklist"]，checklist.md 存在 → 任务归类为 in_progress
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(5, 2), "utf-8");
+    updateStatusWithSteps(taskDir, 5, 2);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
     const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
-    // 任务有 checklist → in_progress，不触发骨架警告
+    // 任务有 checklist + steps → in_progress，不触发骨架警告
     expect(ctx).not.toContain("骨架");
     expect(ctx).toContain("当前进度");
     expect(ctx).toContain("2/5");
@@ -170,7 +201,8 @@ describe("createPromptBuildHandler", () => {
     const result = await handler({ cwd: tmpDir }, {});
 
     const ctx = (result as any).prependContext;
-    expect(ctx).toContain("缺少 checklist.md");
+    // detector 检测为 skeleton（缺少 checklist artifact），hook 显示缺少 checklist
+    expect(ctx).toContain("缺少 checklist");
     expect(ctx).toContain("请立即创建进度追踪清单");
   });
 
@@ -187,6 +219,7 @@ describe("createPromptBuildHandler", () => {
     }
     // 覆盖 checklist 为有未完成项的内容
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(5, 2), "utf-8");
+    updateStatusWithSteps(taskDir, 5, 2);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -211,6 +244,7 @@ describe("createPromptBuildHandler", () => {
     }
     // 所有步骤都完成
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 3), "utf-8");
+    updateStatusWithSteps(taskDir, 3, 3);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -225,13 +259,19 @@ describe("createPromptBuildHandler", () => {
     for (const artifact of ["brief", "spec", "plan"]) {
       writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
-    // checklist.md 存在但没有 checkbox 行
+    // checklist.md 存在但没有 checkbox 行 → 没有步骤编号 → steps 为空
     writeFileSync(join(taskDir, "checklist.md"), "# Checklist\n\nNo steps yet.", "utf-8");
+    // 不写 steps 到 status.yaml，模拟无步骤状态
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
     const result = await handler({ cwd: tmpDir }, {});
-    expect(result).toEqual({});
+
+    // 无 checkbox 行 → buildProgressSummary 看到 steps 为空 → hasMissingChecklist=true
+    // 结果是 prependContext 包含 MISSING_CHECKLIST_ALERT
+    const ctx = (result as any).prependContext;
+    expect(ctx).toBeDefined();
+    expect(ctx).toContain("缺少 checklist");
   });
 
   it("should return missing checklist alert for L4 when running task has no checklist file", async () => {
@@ -260,7 +300,29 @@ describe("createPromptBuildHandler", () => {
 
     const result = await handler({ cwd: tmpDir }, {});
     const ctx = (result as any).prependContext;
-    expect(ctx).toContain("缺少 checklist.md");
+    expect(ctx).toContain("缺少 checklist");
+  });
+
+  it("should return missing checklist alert for L4 when running task has no checkbox lines", async () => {
+    const taskDir = join(tmpDir, "spec-task", "task-1");
+    mkdirSync(taskDir, { recursive: true });
+    writeFileSync(join(taskDir, "status.yaml"), YAML.stringify({ task_id: "task-1", status: "running" }), "utf-8");
+    for (const artifact of ["brief", "spec", "plan"]) {
+      writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
+    }
+    // checklist.md 存在但没有 checkbox 行 → 没有步骤编号 → steps 为空
+    writeFileSync(join(taskDir, "checklist.md"), "# Checklist\n\nNo steps yet.", "utf-8");
+    // 不写 steps 到 status.yaml，模拟无步骤状态
+
+    const detector = new Detector();
+    const handler = createPromptBuildHandler(mockLogger, detector, {});
+    const result = await handler({ cwd: tmpDir }, {});
+
+    // 无 checkbox 行 → buildProgressSummary 看到 steps 为空 → hasMissingChecklist=true
+    // 结果是 prependContext 包含 MISSING_CHECKLIST_ALERT
+    const ctx = (result as any).prependContext;
+    expect(ctx).toBeDefined();
+    expect(ctx).toContain("缺少 checklist");
   });
 
   it("should list all in-progress tasks in progress summary", async () => {
@@ -274,6 +336,7 @@ describe("createPromptBuildHandler", () => {
     }
     // task-a 是 running，有进度
     writeFileSync(join(tmpDir, "spec-task", "task-a", "checklist.md"), makeChecklist(3, 1), "utf-8");
+    updateStatusWithSteps(join(tmpDir, "spec-task", "task-a"), 3, 1);
     // task-b 是 assigned，不是 running → 不会出现在进度摘要中
 
     const detector = new Detector();
@@ -296,6 +359,7 @@ describe("createPromptBuildHandler", () => {
       writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(4, 1), "utf-8");
+    updateStatusWithSteps(taskDir, 4, 1);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -394,6 +458,7 @@ describe("createPromptBuildHandler", () => {
       writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 1), "utf-8");
+    updateStatusWithSteps(taskDir, 3, 1);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -414,6 +479,7 @@ describe("createPromptBuildHandler", () => {
     }
     // 所有步骤都完成 → 不注入打勾提醒
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 3), "utf-8");
+    updateStatusWithSteps(taskDir, 3, 3);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -431,6 +497,7 @@ describe("createPromptBuildHandler", () => {
       writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
     writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 1), "utf-8");
+    updateStatusWithSteps(taskDir, 3, 1);
 
     const detector = new Detector();
     const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -454,6 +521,7 @@ describe("createPromptBuildHandler", () => {
         writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
       }
       writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 1), "utf-8");
+      updateStatusWithSteps(taskDir, 3, 1);
 
       const detector = new Detector();
       const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -472,6 +540,7 @@ describe("createPromptBuildHandler", () => {
       writeFileSync(join(taskDir, "status.yaml"), YAML.stringify({ task_id: "task-1", status: "running" }), "utf-8");
       writeFileSync(join(taskDir, "brief.md"), "# Brief", "utf-8");
       writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 1), "utf-8");
+      updateStatusWithSteps(taskDir, 3, 1);
 
       const detector = new Detector();
       const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -530,6 +599,7 @@ describe("createPromptBuildHandler", () => {
         writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
       }
       writeFileSync(join(taskDir, "checklist.md"), makeChecklist(5, 2), "utf-8");
+      updateStatusWithSteps(taskDir, 5, 2);
 
       const detector = new Detector();
       const handler = createPromptBuildHandler(mockLogger, detector, {});
@@ -552,6 +622,7 @@ describe("createPromptBuildHandler", () => {
         writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
       }
       writeFileSync(join(taskDir, "checklist.md"), makeChecklist(3, 3), "utf-8");
+      updateStatusWithSteps(taskDir, 3, 3);
 
       const detector = new Detector();
       const handler = createPromptBuildHandler(mockLogger, detector, {});

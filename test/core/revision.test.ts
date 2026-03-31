@@ -25,12 +25,11 @@ describe("RevisionBuilder", () => {
       assigned_to: "agent",
       started_at: null,
       completed_at: null,
-      progress: { total: 0, completed: 0, current_step: "", percentage: 0 },
-      parent: null,
-      depth: 0,
+      progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
       children: [],
       outputs: [],
-      timing: { estimated_minutes: null, elapsed_minutes: null },
+      steps: [],
+      timing: { elapsed_minutes: null },
       errors: [],
       alerts: [],
       blocked_by: [],
@@ -57,13 +56,9 @@ describe("RevisionBuilder", () => {
     it("should return max_id + 1 for existing revisions", () => {
       const data = emptyData({
         revisions: [
-          { id: 1, type: "created", timestamp: "", trigger: "", summary: "", impact: "minor",
-            changes: [], affected_steps: { invalidated: [], modified: [], added: [] },
-            resume_from: "", status_before: "pending", status_after: "pending",
+          { id: 1, type: "created", timestamp: "", trigger: "", summary: "",
             block_type: null, block_reason: null },
-          { id: 3, type: "created", timestamp: "", trigger: "", summary: "", impact: "minor",
-            changes: [], affected_steps: { invalidated: [], modified: [], added: [] },
-            resume_from: "", status_before: "pending", status_after: "pending",
+          { id: 3, type: "created", timestamp: "", trigger: "", summary: "",
             block_type: null, block_reason: null },
         ] as Revision[],
       });
@@ -73,9 +68,7 @@ describe("RevisionBuilder", () => {
     it("should return max_id + 1 for single revision", () => {
       const data = emptyData({
         revisions: [
-          { id: 5, type: "created", timestamp: "", trigger: "", summary: "", impact: "minor",
-            changes: [], affected_steps: { invalidated: [], modified: [], added: [] },
-            resume_from: "", status_before: "pending", status_after: "pending",
+          { id: 5, type: "created", timestamp: "", trigger: "", summary: "",
             block_type: null, block_reason: null },
         ] as Revision[],
       });
@@ -96,9 +89,7 @@ describe("RevisionBuilder", () => {
     it("should auto-increment id based on existing revisions", () => {
       const data = emptyData({
         revisions: [
-          { id: 1, type: "created", timestamp: "", trigger: "", summary: "", impact: "minor",
-            changes: [], affected_steps: { invalidated: [], modified: [], added: [] },
-            resume_from: "", status_before: "pending", status_after: "pending",
+          { id: 1, type: "created", timestamp: "", trigger: "", summary: "",
             block_type: null, block_reason: null },
         ] as Revision[],
       });
@@ -122,41 +113,9 @@ describe("RevisionBuilder", () => {
       expect(rev.summary).toBe("Task created");
     });
 
-    it("should default impact to minor", () => {
-      const rev = rb.build({ data: emptyData(), type: "created" });
-      expect(rev.impact).toBe("minor");
-    });
-
-    it("should use provided impact", () => {
-      const rev = rb.build({ data: emptyData(), type: "user_request", impact: "major" });
-      expect(rev.impact).toBe("major");
-    });
-
     it("should set timestamp to current time (faked)", () => {
       const rev = rb.build({ data: emptyData(), type: "created" });
       expect(rev.timestamp).toBe("2026-03-29T12:00:00.000Z");
-    });
-
-    it("should default changes to empty array", () => {
-      const rev = rb.build({ data: emptyData(), type: "created" });
-      expect(rev.changes).toEqual([]);
-    });
-
-    it("should default affected_steps to empty object", () => {
-      const rev = rb.build({ data: emptyData(), type: "created" });
-      expect(rev.affected_steps).toEqual({ invalidated: [], modified: [], added: [] });
-    });
-
-    it("should default resume_from to empty string", () => {
-      const rev = rb.build({ data: emptyData(), type: "created" });
-      expect(rev.resume_from).toBe("");
-    });
-
-    it("should set status_before and status_after to current status", () => {
-      const data = emptyData({ status: "running" });
-      const rev = rb.build({ data, type: "status_change" });
-      expect(rev.status_before).toBe("running");
-      expect(rev.status_after).toBe("running");
     });
   });
 

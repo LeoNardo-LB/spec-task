@@ -33,12 +33,11 @@ describe("executeTaskTransition", () => {
       assigned_to: "agent",
       started_at: null,
       completed_at: null,
-      progress: { total: 5, completed: 2, current_step: "3.1", percentage: 40 },
-      parent: null,
-      depth: 0,
+      progress: { total: 5, completed: 2, skipped: 0, current_step: "3.1", percentage: 40 },
       children: [],
       outputs: [],
-      timing: { estimated_minutes: 30, elapsed_minutes: null },
+      steps: [],
+      timing: { elapsed_minutes: null },
       errors: [],
       alerts: [],
       blocked_by: [],
@@ -94,8 +93,8 @@ describe("executeTaskTransition", () => {
       } else {
         expect(status.revisions.length).toBeGreaterThanOrEqual(1);
         const rev = status.revisions[status.revisions.length - 1];
-        expect(rev.status_before).toBe(from);
-        expect(rev.status_after).toBe(to);
+        expect(rev.type).toBe("status_change");
+        expect(rev.trigger).toBe("agent");
       }
     });
   });
@@ -145,22 +144,24 @@ describe("executeTaskTransition", () => {
 
     const content = readFileSync(join(taskDir, "status.yaml"), "utf-8");
     const status = YAML.parse(content);
-    expect(status.progress.total).toBe(5);
-    expect(status.progress.completed).toBe(2);
-    expect(status.progress.percentage).toBe(40);
+    // Progress calculated from steps (empty → all zeros)
+    expect(status.progress.total).toBe(0);
+    expect(status.progress.completed).toBe(0);
+    expect(status.progress.skipped).toBe(0);
     expect(status.revisions).toHaveLength(0);
   });
 
-  it("should auto-calculate progress from checklist.md on transition", async () => {
+  it("should auto-calculate progress from steps on transition", async () => {
     const taskDir = createTaskWithStatus("pending");
     await executeTaskTransition("t-4", { task_dir: taskDir, status: "assigned" });
 
     const content = readFileSync(join(taskDir, "status.yaml"), "utf-8");
     const status = YAML.parse(content);
 
-    expect(status.progress.total).toBe(5);
-    expect(status.progress.completed).toBe(2);
-    expect(status.progress.percentage).toBe(40);
+    // Progress calculated from steps (empty → all zeros since no steps in status.yaml)
+    expect(status.progress.total).toBe(0);
+    expect(status.progress.completed).toBe(0);
+    expect(status.progress.skipped).toBe(0);
   });
 
   it("should set started_at on first assigned transition", async () => {
