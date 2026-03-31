@@ -93,10 +93,9 @@ apply:
     按执行清单逐步执行。使用工具驱动状态管理：
 
     1. 从第一个未勾选的步骤开始
-    2. **每完成一个步骤，立即调用 `checklist_update` 工具打勾**（参数：task_dir, step_number, checked=true）
-       - 这是原子操作：一次 API 调用更新一个步骤，自动重算进度并更新 status.yaml
-       - 绝对禁止手动编辑 checklist.md 文件来打勾，必须使用 checklist_update 工具
-       - step_number 必须与 checklist.md 中的步骤编号完全匹配（如 "1.1", "2.3"）
+    2. **每完成一个步骤，立即调用 `checklist_write` 工具写回更新后的完整 checklist**（先 `checklist_read` 读取 → 修改勾选 → `checklist_write` 覆盖）
+       - `checklist_write` 全量覆盖 checklist.md 并自动重算进度、更新 status.yaml
+       - 绝对禁止手动编辑 checklist.md 文件来打勾，必须使用 checklist_write 工具
     3. 使用 task_transition 工具切换任务阶段（如 pending → assigned）
     4. 使用 task_log 工具记录执行日志（产出物路径、耗时、备注）
     5. 产出物直接写入任务目录下（如 analysis-report.md、data.json 等）

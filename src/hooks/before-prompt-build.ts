@@ -1,103 +1,125 @@
-import type { ArtifactName } from "../types.js";
+import type { ArtifactName, SpecTaskConfig, TrackingLevel } from "../types.js";
 import { ConfigManager } from "../core/config.js";
 import { FileUtils } from "../file-utils.js";
 import { join } from "path";
 import { readdir } from "fs/promises";
+import YAML from "yaml";
 
-/** L1 自动初始化提醒模板 */
-const INIT_REMINDER = `⚠️ 强制要求：你收到任何任务时，必须先加载 spec-task 技能，并严格按照技能中的工作流程管理任务。不允许跳过。`;
+/** 缺失 checklist 强提醒 */
+const MISSING_CHECKLIST_ALERT = `🚨 当前任务缺少 checklist.md！请立即创建进度追踪清单。
+步骤应包含 [spawn:agent-name] 或 [check:type] 标识符。`;
 
-/** L2 轻量提醒模板 */
-const LIGHT_REMINDER = `⚠️ 强制要求：你收到任何任务时，必须先加载 spec-task 技能，并严格按照技能中的工作流程管理任务。不允许跳过。`;
+/** System Prompt 层打勾指引（静态，可被 prompt caching） */
+const CHECKLIST_GUIDE = `## Checklist 进度追踪规则
+你拥有 checklist_read 和 checklist_write 工具。
+- checklist_read：全量读取 checklist 内容和进度统计（只读）
+- checklist_write：全量覆盖 checklist.md 并自动更新进度
 
-/** 介入级别阈值映射 */
-const INTERVENTION_THRESHOLDS: Record<string, number> = {
-  low: 20,
-  medium: 10,
-  high: 3,
-};
+**执行纪律（强制）**：
+- 必须按步骤编号顺序逐步完成所有步骤，禁止跳步
+- 每完成一个步骤后必须立即使用 checklist_write 写回更新后的内容
+- 不要手动编辑 checklist.md 文件，必须使用 checklist_write 工具
+- 未标记跳过的步骤均视为必须完成，不能自行决定跳过`;
 
-/**
- * 构建介入评估提示词。
- * 引导 LLM 对任务做最大拆分（X.Y.Z），统计叶子节点数与阈值对比。
- */
-function buildInterventionPrompt(level: string, threshold: number): string {
-  return `在开始执行任务前，你需要先评估任务复杂度：
+/** 打勾提醒（追加到进度摘要末尾，动态填充 {next_step}） */
+const CHECKLIST_REMINDER = `⚠️ 下一个待完成步骤：{next_step}。请先完成该步骤后用 checklist_write 写回。禁止跳过未完成步骤。`;
 
-1. 将任务尽可能细分为子步骤，使用 X.Y.Z 编号格式：
-   - X = 功能模块 / 阶段（## H2 级别）
-   - Y = 模块内子任务
-   - Z = 子任务的具体操作步骤（叶子节点）
+/** 内容缺失提醒（包含 template 格式示例，引导 LLM 补充缺失构件） */
+const SKELETON_FILL_REMINDER = `请在下次 task_create 时传入完整内容，或使用 checklist_write / write 工具补充。
 
-2. 统计叶子节点总数（最底层 Z 级步骤的数量）
+**brief.md 格式参考：**
+## 目标
+一句话概括核心目标。
+## 成功标准
+- 标准1: 可衡量的完成条件
 
-3. 判断规则（当前介入级别：${level}，阈值：${threshold} 步）：
-   - 叶子节点数 ≥ ${threshold} → 必须启动 spec-task 流程（config_merge → task_recall → task_create → 填充文档 → 执行）
-   - 叶子节点数 < ${threshold} → 可以直接执行，但拆分结果仍有参考价值
+**plan.md 格式参考：**
+## 概述
+整体执行策略。
+## 步骤分解
+### 步骤 1: 名称
+- 做什么 → 为什么 → 预期产出
 
-示例：
-- "修复登录按钮颜色错误" → 1.1（1 步）< ${threshold} → 直接执行
-- "给 API 添加分页功能" → 1.1, 1.2, 2.1, 2.2, 2.3, 3.1, 4.1, 4.2（8 步）< ${threshold} → 直接执行
-- "实现用户注册功能" → 1.1, 1.2, 1.3, 2.1, 2.2, 3.1, 3.2, 3.3, 4.1, 4.2, 5.1, 5.2（12 步）≥ ${threshold} → 启动 spec-task
-
-注意：不确定时往"需要 spec-task"方向判断。`;
-}
-
-/**
- * 构建 L3 骨架警告内容。
- */
-function buildSkeletonWarning(skeletonTasks: Array<{ name: string; missing: ArtifactName[] }>): string {
-  const lines = skeletonTasks.map(t => `  - ${t.name}: 缺少 ${t.missing.join(", ")}`);
-  return `🚨 SPEC-TASK 强制要求：检测到以下任务只有骨架（status.yaml）但缺少核心文档：
-
-${lines.join("\n")}
-
-你必须立即为这些任务填充缺失的文档：
-1. 使用 config_merge 工具检查配置
-2. 使用 task_create 工具创建任务（如未创建）
-3. 按 brief → spec → plan → checklist 拓扑序填充内容
-4. 不允许"先做再说"——没有 plan 的任务不允许进入 running 状态
-
-这是不可协商的工作流要求。跳过此步骤将导致验收失败。`;
-}
-
-/**
- * 构建 L4 恢复提醒内容。
- */
-function buildResumeReminder(tasks: Array<{ name: string; status: string }>): string {
-  const lines = tasks.map(t => `  - ${t.name} (${t.status})`);
-  return `📋 SPEC-TASK: 你有未完成的任务：
-${lines.join("\n")}
-
-优先恢复这些任务，使用 task_resume 工具获取断点信息。`;
-}
+**checklist.md 格式参考：**
+## 1. 阶段名称
+- [ ] 1.1 步骤描述`;
 
 /** 匹配 checkbox 行 */
 const CHECKBOX_REGEX = /^- \[([ x])\]\s*(.+)/;
 /** 提取步骤编号 */
 const STEP_PATTERN = /^(\d+(?:\.\d+)+)/;
 
+/** 根据 tracking level 构建构件要求提醒文本 */
+function buildArtifactRequirement(level: TrackingLevel): string {
+  switch (level) {
+    case "high":
+      return "当前追踪级别: high。task_create 时建议同时传入 brief + plan + checklist。";
+    case "medium":
+      return "当前追踪级别: medium。task_create 时建议同时传入 brief + checklist。";
+    default:
+      return "当前追踪级别: low。task_create 时建议传入 checklist。";
+  }
+}
+
+interface ProgressInfo {
+  summary: string | null;
+  hasMissingChecklist: boolean;
+  /** 下一个待完成的步骤编号（取所有 running 任务中编号最小的未完成步骤） */
+  nextStep: string | null;
+}
+
 /**
- * 扫描工作区中所有任务的 checklist.md，生成结构化状态摘要。
- * 用于在 system prompt 中注入 checklist 进度信息，提醒 LLM 及时打勾。
+ * 扫描工作区中所有 running 任务的 checklist.md，生成进度摘要。
+ * 同时检测是否存在缺少 checklist.md 的 running 任务。
+ *
+ * 输出格式：
+ * 📋 当前进度：
+ *   - task-name (running): 2/5 步完成（40%）
+ *     未完成: 2.3, 3.1
+ *
+ * 仅在有未完成步骤时才输出 summary（全部完成则返回 null）。
  */
-async function buildChecklistStatusSummary(workspaceDir: string): Promise<string | null> {
+async function buildProgressSummary(workspaceDir: string): Promise<ProgressInfo> {
   const fu = new FileUtils();
   const specTaskDir = join(workspaceDir, "spec-task");
 
   try {
     const entries = await readdir(specTaskDir, { withFileTypes: true });
     const summaryLines: string[] = [];
+    let hasMissingChecklist = false;
+    let firstUncheckedStep: string | null = null;
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
 
+      // 读取 status.yaml 判断是否为 running
+      const statusPath = join(specTaskDir, entry.name, "status.yaml");
+      const statusContent = await fu.safeReadFile(statusPath);
+      if (!statusContent) continue;
+
+      let statusData: { status?: string };
+      try {
+        statusData = YAML.parse(statusContent) as { status?: string };
+      } catch {
+        continue;
+      }
+
+      if (statusData.status !== "running") continue;
+
+      // 检查 checklist.md 是否存在
       const checklistPath = join(specTaskDir, entry.name, "checklist.md");
-      const stat = await fu.safeStat(checklistPath);
-      if (!stat || !stat.isFile()) continue;
+      const checklistStat = await fu.safeStat(checklistPath);
+
+      if (!checklistStat || !checklistStat.isFile()) {
+        hasMissingChecklist = true;
+        continue;
+      }
 
       const content = await fu.safeReadFile(checklistPath);
-      if (!content) continue;
+      if (!content) {
+        hasMissingChecklist = true;
+        continue;
+      }
 
       let total = 0;
       let completed = 0;
@@ -117,22 +139,27 @@ async function buildChecklistStatusSummary(workspaceDir: string): Promise<string
             completed++;
           } else {
             uncheckedSteps.push(stepMatch[1]);
+            if (!firstUncheckedStep) firstUncheckedStep = stepMatch[1];
           }
         }
       }
 
       if (total > 0 && completed < total) {
-        const stepsPreview = uncheckedSteps.slice(0, 5).join(", ");
-        const suffix = uncheckedSteps.length > 5 ? `...` : "";
-        summaryLines.push(`  - ${entry.name}: ${completed}/${total} 步完成，未完成: ${stepsPreview}${suffix}`);
+        const pct = Math.round((completed / total) * 100);
+        summaryLines.push(`  - ${entry.name} (running): ${completed}/${total} 步完成（${pct}%）`);
+        summaryLines.push(`    未完成: ${uncheckedSteps.join(", ")}`);
       }
     }
 
-    if (summaryLines.length === 0) return null;
+    if (summaryLines.length === 0) return { summary: null, hasMissingChecklist, nextStep: firstUncheckedStep };
 
-    return `\n📋 Checklist 进度（每完成一步必须调用 checklist_update 打勾）：\n${summaryLines.join("\n")}`;
+    return {
+      summary: `\n📋 当前进度：\n${summaryLines.join("\n")}`,
+      hasMissingChecklist,
+      nextStep: firstUncheckedStep,
+    };
   } catch {
-    return null;
+    return { summary: null, hasMissingChecklist: false, nextStep: null };
   }
 }
 
@@ -145,11 +172,14 @@ interface PluginLogger {
 
 interface HookConfig {
   enforceOnSubAgents?: boolean;
-  interventionLevel?: "low" | "medium" | "high" | "always";
 }
 
 /**
  * 创建 before_prompt_build hook 处理器。
+ *
+ * 双层注入策略：
+ * - prependSystemContext（System Prompt 层）：静态打勾指引，可被 prompt caching
+ * - prependContext（User Message 层）：动态进度摘要 + 打勾提醒
  *
  * @param logger          插件日志器
  * @param detector        骨架检测器实例
@@ -191,8 +221,24 @@ export function createPromptBuildHandler(
       if (sessionKey && norm(sessionKey) !== sessionKey) workspaceDirMap.set(sessionKey, workspaceDir);
     }
 
-    const result = await detector.detect(workspaceDir);
-    const interventionLevel = config.interventionLevel ?? "high";
+    // 读取 tracking level（仅用于 hook 提醒级别，不再驱动骨架生成）
+    let trackingLevel: TrackingLevel = "low";
+    try {
+      const config: SpecTaskConfig = await cm.loadMergedConfig(workspaceDir);
+      if (config.tracking?.level) {
+        trackingLevel = config.tracking.level;
+      }
+    } catch { /* 配置加载失败，使用默认 low */ }
+
+    // 根据 tracking level 构建 requiredArtifacts（供 detector 使用）
+    const TRACKING_ARTIFACTS: Record<TrackingLevel, ArtifactName[]> = {
+      low: ["checklist"],
+      medium: ["brief", "checklist"],
+      high: ["brief", "plan", "checklist"],
+    };
+    const requiredArtifacts = TRACKING_ARTIFACTS[trackingLevel];
+
+    const result = await detector.detect(workspaceDir, requiredArtifacts);
 
     switch (result.level) {
       case "none":
@@ -207,30 +253,54 @@ export function createPromptBuildHandler(
           logger.error(`[spec-task] Failed to auto-initialize: ${e}`);
           return {};
         }
-        // always 级别：无条件强制（现有行为）
-        if (interventionLevel === "always") {
-          return { prependContext: INIT_REMINDER };
-        }
-        // 其他级别：注入介入评估提示词
-        return { prependContext: buildInterventionPrompt(interventionLevel, INTERVENTION_THRESHOLDS[interventionLevel]) };
+        return { prependContext: "✅ spec-task 已就绪。" };
+
       case "empty":
-        // always 级别：无条件强制（现有行为）
-        if (interventionLevel === "always") {
-          return { prependContext: LIGHT_REMINDER };
-        }
-        // 其他级别：注入介入评估提示词
-        return { prependContext: buildInterventionPrompt(interventionLevel, INTERVENTION_THRESHOLDS[interventionLevel]) };
+        // 无活跃任务：不注入 prependSystemContext
+        return { prependContext: "📋 无活跃任务。" };
+
       case "skeleton": {
-        const checklistSummary = await buildChecklistStatusSummary(workspaceDir);
-        const skeletonWarning = buildSkeletonWarning(result.skeleton_tasks);
-        return { prependContext: checklistSummary ? `${skeletonWarning}\n${checklistSummary}` : skeletonWarning };
+        const lines = result.skeleton_tasks.map(
+          t => `  - ${t.name}: 缺少 ${t.missing.join(", ")}`
+        );
+
+        const warning = `📝 检测到以下任务缺少构件文件：\n${lines.join("\n")}\n${SKELETON_FILL_REMINDER}`;
+
+        // 根据 tracking level 构建构件要求提醒
+        const artifactRequirement = buildArtifactRequirement(trackingLevel);
+
+        const progress = await buildProgressSummary(workspaceDir);
+        const parts: string[] = [warning];
+        if (progress.summary) {
+          parts.push(progress.summary);
+          parts.push(CHECKLIST_REMINDER.replace("{next_step}", progress.nextStep ?? "未知"));
+        }
+        if (progress.hasMissingChecklist) parts.push(MISSING_CHECKLIST_ALERT);
+        return {
+          prependSystemContext: `${artifactRequirement}\n\n${CHECKLIST_GUIDE}`,
+          prependContext: parts.join("\n"),
+        };
       }
+
       case "in_progress": {
-        const checklistSummary = await buildChecklistStatusSummary(workspaceDir);
-        const resumeReminder = buildResumeReminder(result.incomplete_tasks);
-        return { prependContext: checklistSummary ? `${resumeReminder}\n${checklistSummary}` : resumeReminder };
+        const progress = await buildProgressSummary(workspaceDir);
+        const parts: string[] = [];
+        if (progress.summary) {
+          parts.push(progress.summary);
+          parts.push(CHECKLIST_REMINDER.replace("{next_step}", progress.nextStep ?? "未知"));
+        }
+        if (progress.hasMissingChecklist) parts.push(MISSING_CHECKLIST_ALERT);
+        if (parts.length === 0) return {};
+
+        const artifactRequirement = buildArtifactRequirement(trackingLevel);
+        return {
+          prependSystemContext: `${artifactRequirement}\n\n${CHECKLIST_GUIDE}`,
+          prependContext: parts.join("\n"),
+        };
       }
+
       case "all_done":
+        // 所有任务已完成：不注入 prependSystemContext
         return {};
     }
   };

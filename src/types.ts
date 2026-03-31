@@ -20,6 +20,8 @@ export type ArtifactAction = "added" | "modified" | "removed";
 
 export type ArtifactName = "brief" | "spec" | "plan" | "checklist";
 
+export type TrackingLevel = "low" | "medium" | "high";
+
 export type DetectorLevel = "none" | "empty" | "skeleton" | "in_progress" | "all_done";
 
 // ============================================================================
@@ -150,6 +152,10 @@ export interface TaskStatusData {
 
 export interface SpecTaskConfig {
   context?: string;
+  tracking?: {
+    level?: TrackingLevel;
+    required_artifacts?: ArtifactName[];
+  };
   runtime?: {
     allow_agent_self_delegation?: boolean;
     task_timeout?: number;
@@ -200,6 +206,9 @@ export interface TaskCreateParams {
   assigned_to?: string;
   parent?: string;
   depth?: number;
+  brief?: string;
+  plan?: string;
+  checklist?: string;
 }
 
 export interface TaskTransitionParams {
@@ -252,14 +261,13 @@ export interface TaskArchiveParams {
   dry_run?: boolean;
 }
 
-export interface ChecklistUpdateParams {
+export interface ChecklistReadParams {
   task_dir: string;
-  step_number: string;
-  checked: boolean;
 }
 
-export interface ChecklistStatusParams {
+export interface ChecklistWriteParams {
   task_dir: string;
+  content: string;
 }
 
 // ============================================================================
@@ -276,6 +284,7 @@ export interface TaskCreateResult extends ToolResult {
   task_id: string;
   status: TaskStatus;
   created_dirs: string[];
+  created_artifacts: string[];
 }
 
 export interface TaskTransitionResult extends ToolResult {
@@ -285,21 +294,14 @@ export interface TaskTransitionResult extends ToolResult {
   revision_id: number;
 }
 
-export interface ChecklistUpdateResult extends ToolResult {
-  task_dir: string;
-  step_number: string;
-  checked: boolean;
-  line_before: string;
-  line_after: string;
+export interface ChecklistReadResult extends ToolResult {
+  content: string;
   progress: TaskProgress;
+  checklist_path: string;
 }
 
-export interface ChecklistStatusResult extends ToolResult {
-  total_steps: number;
-  completed_steps: number;
-  progress_percent: number;
-  unchecked_steps: string[];
-  next_suggested_step: string | null;
+export interface ChecklistWriteResult extends ToolResult {
+  task_dir: string;
   checklist_path: string;
 }
 
@@ -350,3 +352,5 @@ export const CONTEXT_FILES = [
   "README.md",
   "CLAUDE.md",
 ] as const;
+
+

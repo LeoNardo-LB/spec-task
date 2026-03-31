@@ -36,14 +36,13 @@ import {
   executeConfigMerge,
 } from "./src/tools/config-merge.js";
 import {
-  ChecklistUpdateParamsSchema,
-  executeChecklistUpdate,
-} from "./src/tools/checklist-update.js";
+  ChecklistReadParamsSchema,
+  executeChecklistRead,
+} from "./src/tools/checklist-read.js";
 import {
-  ChecklistStatusParamsSchema,
-  executeChecklistStatus,
-} from "./src/tools/checklist-status.js";
-import { createToolResultReminderHandler } from "./src/hooks/tool-result-reminder.js";
+  ChecklistWriteParamsSchema,
+  executeChecklistWrite,
+} from "./src/tools/checklist-write.js";
 
 export default definePluginEntry({
   id: "spec-task",
@@ -63,7 +62,6 @@ export default definePluginEntry({
     // 但 PluginHookAgentContext（before_prompt_build）有。
     // 因此在 before_prompt_build 中记录映射，在 before_tool_call 中查找。
     const workspaceDirMap = new Map<string, string>();
-    const normalizeKey = (k: string | undefined) => k?.trim().toLowerCase() || undefined;
 
     // before_prompt_build: 检测 spec-task 状态，注入系统提示，同时记录 workspaceDir
     api.on(
@@ -76,16 +74,24 @@ export default definePluginEntry({
     // 查找优先级：sessionKey > agentId。
     const SPEC_TASK_TOOLS = new Set(["task_create", "config_merge", "task_archive", "task_recall"]);
     api.on("before_tool_call", async (event, ctx) => {
+      // ── 拦截对 checklist.md 的直接写入，强制使用 checklist_write ──
+      if (event.toolName === "write" || event.toolName === "edit") {
+        const filePath = (event.params?.path ?? event.params?.file_path ?? "") as string;
+        if (filePath.endsWith("checklist.md") || filePath.includes("/checklist.md")) {
+          api.logger.info(`[spec-task] before_tool_call: BLOCKED ${event.toolName} to checklist.md — use checklist_write instead`);
+          return {
+            block: true,
+            params: event.params,
+          };
+        }
+      }
+
+      // ── 仅保留 project_root 注入逻辑 ──
       if (!SPEC_TASK_TOOLS.has(event.toolName)) return;
       const params = event.params ?? {};
       if (params.project_root) {
         api.logger.info(`[spec-task] before_tool_call: ${event.toolName} already has project_root=${params.project_root}, skip`);
         return;
-      }
-      // DEBUG: 记录查找过程
-      api.logger.info(`[spec-task] before_tool_call: tool=${event.toolName} agentId=${ctx.agentId} sessionKey=${ctx.sessionKey} mapSize=${workspaceDirMap.size}`);
-      if (workspaceDirMap.size > 0) {
-        api.logger.info(`[spec-task] Map keys: ${[...workspaceDirMap.keys()].join(", ")}`);
       }
       // 从 Map 中查找 workspaceDir
       const workspaceDir =
@@ -98,17 +104,6 @@ export default definePluginEntry({
       api.logger.info(`[spec-task] before_tool_call: injecting project_root=${workspaceDir}`);
       return { params: { ...params, project_root: workspaceDir } };
     });
-
-    // tool_result_persist: 在每次工具调用结果中注入 checklist 提醒
-    // 利用 LLM 近因效应——提醒出现在最近的上下文中，比 system prompt 更有效
-    api.on(
-      "tool_result_persist",
-      createToolResultReminderHandler(
-        workspaceDirMap,
-        normalizeKey,
-        api.logger
-      )
-    );
 
     // ── 工具注册（9 个）──────────────────────────────────────
     api.registerTool({
@@ -134,7 +129,36 @@ export default definePluginEntry({
     api.registerTool({
       name: "task_create",
       description:
-        "创建新任务并初始化 status.yaml。创建后必须按 brief → spec → plan → checklist 拓扑序填充内容，不允许创建后不填充就进入 running 状态。",
+        "创建 spec-task 任务。创建目录结构、初始化 status.yaml、写入构件文件。" +
+        "\n\n**参数说明：**" +
+        "\n- task_name (必需): kebab-case 任务名称" +
+        "\n- brief (推荐): 任务简报，定义目标和成功标准" +
+        "\n- plan (推荐): 执行计划，说明步骤分解和策略" +
+        "\n- checklist (推荐): 进度追踪清单，后续用 checklist_write 更新进度" +
+        "\n\n**brief 格式参考：**" +
+        "\n## 目标" +
+        "\n一句话概括核心目标。" +
+        "\n## 成功标准" +
+        "\n- 标准1: 可衡量的完成条件" +
+        "\n- 标准2: ..." +
+        "\n## 背景与上下文" +
+        "\n为什么需要做这件事。" +
+        "\n\n**plan 格式参考：**" +
+        "\n## 概述" +
+        "\n整体执行策略。" +
+        "\n## 步骤分解" +
+        "\n### 步骤 1: 名称" +
+        "\n- 做什么 → 为什么 → 预期产出" +
+        "\n### 步骤 2: 名称" +
+        "\n- ..." +
+        "\n\n**checklist 格式参考：**" +
+        "\n## 1. 阶段名称" +
+        "\n- [ ] 1.1 步骤描述" +
+        "\n- [ ] 1.2 步骤描述" +
+        "\n## 2. 阶段名称" +
+        "\n- [ ] 2.1 步骤描述" +
+        "\n\n建议：在调用时同时传入 brief + checklist（或 brief + plan + checklist），" +
+        "\n确保任务有清晰的目标定义和进度追踪。",
       parameters: TaskCreateParamsSchema,
       async execute(_id, params) {
         return executeTaskCreate(_id, params as any);
@@ -192,39 +216,33 @@ export default definePluginEntry({
     });
 
     api.registerTool({
-      name: "checklist_update",
+      name: "checklist_read",
       description:
-        `原子更新 checklist.md 中单个步骤的勾选状态。每完成一个步骤后**必须**调用此工具。
-
-**触发条件**：当你完成 checklist 中的任何步骤时，必须调用此工具来打勾。不要手动编辑 checklist.md 文件。
-
-**参数说明**：
-- task_dir（必填）：任务目录的绝对路径（task_create 返回的 task_dir）
-- step_number（必填）：步骤编号，如 '1.1'、'2.3'。必须与 checklist.md 中的编号完全匹配
-- checked（必填）：true 表示勾选（标记为完成），false 表示取消勾选
-
-**正例**：
-✅ 完成数据获取后调用 checklist_update(task_dir, '1.1', true)
-✅ 发现步骤标记错误时调用 checklist_update(task_dir, '1.2', false) 取消
-
-**反例**：
-❌ 直接编辑 checklist.md 文件来打勾——这是禁止的，必须使用此工具
-❌ 将未完成的步骤标记为已完成——不要虚假打勾
-
-**状态约束**：一次只能打勾一个步骤。自动重新计算进度并更新 status.yaml。`,
-      parameters: ChecklistUpdateParamsSchema,
+        "全量读取指定任务的 checklist.md 内容和进度统计（只读，不修改任何文件）。返回完整 markdown 内容、进度百分比和未完成步骤。",
+      parameters: ChecklistReadParamsSchema,
       async execute(_id, params) {
-        return executeChecklistUpdate(_id, params as any);
+        return executeChecklistRead(_id, params as any);
       },
     });
 
     api.registerTool({
-      name: "checklist_status",
+      name: "checklist_write",
       description:
-        "查询指定任务的 checklist 完成进度（只读，不修改任何文件）。返回总步骤数、已完成数、完成百分比、未完成步骤列表和建议的下一步骤。",
-      parameters: ChecklistStatusParamsSchema,
+        `全量覆盖指定任务的 checklist.md 文件。传入完整 markdown 内容，覆盖写入 checklist.md 并自动更新 status.yaml 进度。
+
+**推荐工作流**：先 checklist_read 读取当前状态 → 完成步骤 → checklist_write 写回更新后的完整内容。
+
+**参数说明**：
+- task_dir（必填）：任务目录的绝对路径（task_create 返回的 task_dir）
+- content（必填）：完整的 checklist markdown 内容。全量覆盖，传入什么就存什么。
+
+**典型用法**：
+✅ checklist_read(task_dir) → 修改 content 中的 [ ] 为 [x] → checklist_write(task_dir, content)
+✅ 重新规划任务：直接传入新的完整步骤列表
+✅ 批量打勾：传入的内容中已勾选的步骤会被正确计算进度`,
+      parameters: ChecklistWriteParamsSchema,
       async execute(_id, params) {
-        return executeChecklistStatus(_id, params as any);
+        return executeChecklistWrite(_id, params as any);
       },
     });
   },

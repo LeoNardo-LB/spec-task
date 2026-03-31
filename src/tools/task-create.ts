@@ -1,9 +1,10 @@
 import { join } from "path";
+import { writeFile } from "fs/promises";
 import type { TaskCreateParams, TaskStatusData, TaskCreateResult } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { RevisionBuilder } from "../core/revision.js";
 import { FileUtils } from "../file-utils.js";
-import { ConfigManager } from "../core/config.js";
+import { ProgressCalculator } from "../core/progress.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskCreateParamsSchema = {
@@ -16,12 +17,24 @@ export const TaskCreateParamsSchema = {
     assigned_to: { type: "string", description: "Assigned agent (default: 'agent')" },
     parent: { type: "string", description: "Parent task directory path" },
     depth: { type: "number", description: "Nesting depth (default: 0)" },
+    brief: {
+      type: "string",
+      description: "任务简报：定义目标和成功标准。格式：## 目标\n...\n## 成功标准\n...",
+    },
+    plan: {
+      type: "string",
+      description: "执行计划：说明步骤分解和策略。格式：## 概述\n...\n## 步骤分解\n...",
+    },
+    checklist: {
+      type: "string",
+      description: "进度追踪清单：markdown checkbox 列表。格式：## 1. 阶段\n- [ ] 1.1 步骤\n...",
+    },
   },
 };
 
 /**
  * task_create 工具实现。
- * 创建目录结构 → 初始化 status.yaml → 创建 revision → 注册父子关系。
+ * 创建目录结构 → 初始化 status.yaml → 写入构件内容 → 创建 revision → 注册父子关系。
  */
 export async function executeTaskCreate(
   _id: string,
@@ -34,6 +47,9 @@ export async function executeTaskCreate(
     assigned_to = "agent",
     parent = null,
     depth = 0,
+    brief,
+    plan,
+    checklist,
   } = params;
 
   // 1. 参数校验
@@ -80,12 +96,47 @@ export async function executeTaskCreate(
   initialData.revisions.push(revision);
   await store.saveStatus(taskDir, initialData);
 
-  // 6. 更新父任务 children
+  // 6. 写入 LLM 传入的构件内容
+  const createdArtifacts: string[] = [];
+
+  if (brief) {
+    const filePath = join(taskDir, "brief.md");
+    await writeFile(filePath, brief, "utf-8");
+    createdArtifacts.push("brief");
+  }
+
+  if (plan) {
+    const filePath = join(taskDir, "plan.md");
+    await writeFile(filePath, plan, "utf-8");
+    createdArtifacts.push("plan");
+  }
+
+  if (checklist) {
+    const filePath = join(taskDir, "checklist.md");
+    await writeFile(filePath, checklist, "utf-8");
+    createdArtifacts.push("checklist");
+    // 自动计算进度
+    try {
+      const pc = new ProgressCalculator();
+      initialData.progress = await pc.calculate(filePath);
+      initialData.updated = new Date().toISOString();
+      await store.saveStatus(taskDir, initialData);
+    } catch { /* 进度计算失败不阻塞 */ }
+  }
+
+  // 7. 更新父任务 children
   if (parent && await fu.safeStat(join(parent, "status.yaml"))) {
     try {
       await store.transaction(parent, (pd) => { if (!pd.children.includes(taskDir)) pd.children.push(taskDir); return pd; });
     } catch { /* 父任务更新失败不阻塞 */ }
   }
 
-  return formatResult({ success: true, task_dir: taskDir, task_id: task_name, status: "pending", created_dirs: [taskDir] } satisfies TaskCreateResult);
+  return formatResult({
+    success: true,
+    task_dir: taskDir,
+    task_id: task_name,
+    status: "pending",
+    created_dirs: [taskDir],
+    created_artifacts: createdArtifacts,
+  } satisfies TaskCreateResult);
 }
