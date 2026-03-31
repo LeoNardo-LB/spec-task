@@ -1,6 +1,6 @@
 ---
 name: spec-task
-description: "结构化任务管理与生命周期强制执行。以下场景必须使用：(1) 任何被 coordinator 通过 sessions_spawn 派发的任务 (2) 可拆解步骤≥3 的复杂任务 (3) 工作区已存在 spec-task/ 目录时的后续任务 (4) 用户显式要求使用 spec-task (5) prependContext 明确提醒时。跳过 spec-task 会导致验收失败。"
+description: "结构化任务管理与生命周期强制执行。以下场景必须使用：(1) 任何被 coordinator 通过 sessions_spawn 派发的任务 (2) prependContext 要求启动时（基于任务拆分叶子节点数与介入阈值对比）(3) 工作区已存在 spec-task/ 目录且检测到未完成任务时 (4) 用户显式要求使用 spec-task。跳过 spec-task 会导致验收失败。"
 metadata: {}
 ---
 
@@ -12,9 +12,26 @@ metadata: {}
 2. 任务生命周期每一步都必须显式转换，不可跳过状态。
 3. 四文档必须按拓扑序在 `running` 之前完成：`brief → spec → plan → checklist`。
 4. 没有 checklist 的执行 = 不可追溯 = 验收失败。
-5. 验收时所有 criteria 通过且任务为 running，自动转为 completed。
+5. **每完成一个步骤必须立即调用 `checklist_write` 工具写回更新后的 checklist**。先 `checklist_read` 读取当前状态 → 完成步骤 → `checklist_write` 写回完整内容。禁止手动编辑 checklist.md 文件来更新勾选状态。
+6. **双层提醒机制**：系统通过 before_prompt_build（system prompt 层注入打勾指引）和 prependContext（用户消息层注入进度摘要）自动提醒 LLM 使用 checklist_write。但这些提醒只是辅助——LLM 仍需主动调用工具。
+7. 验收时所有 criteria 通过且任务为 running，自动转为 completed。
 
-## 工作流程（8步）
+## 介入程度
+
+spec-task 的介入程度由 `interventionLevel` 配置控制（默认：high）：
+
+| 级别 | 阈值 | 含义 |
+|------|------|------|
+| low | ≥ 20 步 | 仅大型任务触发 |
+| medium | ≥ 10 步 | 中型及以上任务触发 |
+| high | ≥ 3 步 | 小型及以上任务触发（默认） |
+| always | 无条件 | 每次都触发 |
+
+判断方式：将任务拆分为 X.Y.Z 编号，统计叶子节点数与阈值对比。
+此评估由 `before_prompt_build` hook 在 prependContext 中引导 LLM 完成。
+`enforceOnSubAgents: false` 可完全关闭 hook（优先级最高）。
+
+## 工作流程（9步）
 
 ```
 1. config_merge    → 检查/合并项目配置
@@ -22,9 +39,10 @@ metadata: {}
 3. task_create     → 创建任务（task_name 必填，生成 status.yaml）
 4. 填充文档        → brief → spec → plan → checklist（按拓扑序）
 5. task_transition → assigned → running（开始执行）
-6. task_log        → 记录运行时事件（error/alert/add-block/remove-block/output/retry）
-7. task_verify     → 验收管理（add-criterion → finalize；finalize 自动触发 completed）
-8. task_archive    → 归档（生成 history + lessons，支持 dry_run）
+6. 执行步骤        → 每完成一步立即调用 checklist_write 写回
+7. task_log        → 记录运行时事件（error/alert/add-block/remove-block/output/retry）
+8. task_verify     → 验收管理（add-criterion → finalize；finalize 自动触发 completed）
+9. task_archive    → 归档（生成 history + lessons，支持 dry_run）
 ```
 
 ## 状态机（8种状态 · 14条转换）
@@ -86,12 +104,13 @@ brief（无依赖）→ spec（依赖 brief）→ plan（依赖 brief）→ chec
 2. 第一步调用 `config_merge`，第二步调用 `task_recall`，第三步调用 `task_create`。
 3. 创建后必须填充 brief → spec → plan → checklist 全部四文档。
 4. 只有 checklist 中第一个步骤勾选后，才能开始实际执行。
-5. 工作区已有 spec-task/ 目录时，优先用 `task_resume` 检查可恢复任务。
+5. **每完成一个步骤，必须立即调用 `checklist_write(task_dir, content)` 写回更新后的完整 checklist。先 `checklist_read` 获取当前内容，修改勾选后用 `checklist_write` 覆盖。这是强制要求，不是可选的。**
+6. 工作区已有 spec-task/ 目录时，优先用 `task_resume` 检查可恢复任务。
 
 ## Hook 系统
 
-- **before_prompt_build**: 检测工作区状态，注入 prependContext 提醒。
-- **before_tool_call**: 对 task_create、config_merge、task_archive、task_recall 自动注入 `project_root` 参数。
+- **before_prompt_build**: 检测工作区状态，注入 prependContext 提醒（含 checklist 进度摘要）。
+- **before_tool_call**: 对 task_create、config_merge、task_archive、task_recall 自动注入 `project_root` 参数，并拦截对 checklist.md 的直接写入。
 
 ## 工具速查表
 
@@ -105,6 +124,8 @@ brief（无依赖）→ spec（依赖 brief）→ plan（依赖 brief）→ chec
 | `task_verify` | task_dir, action | 验收管理；action: add-criterion / finalize / get |
 | `task_resume` | task_dir | 断点恢复，返回 next_action 决策 |
 | `task_archive` | task_dir | 归档（可选 agent_workspace, project_root, agent_name, dry_run） |
+| `checklist_write` | task_dir, content | 全量覆盖 checklist.md 并自动更新 status.yaml 进度。**每完成一步必须调用**。 |
+| `checklist_read` | task_dir | 全量读取 checklist 内容和进度统计（只读）。 |
 
 ## 验收状态
 

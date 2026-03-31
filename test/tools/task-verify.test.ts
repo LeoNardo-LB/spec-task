@@ -36,12 +36,11 @@ describe("executeTaskVerify", () => {
       assigned_to: "agent",
       started_at: status === "running" ? "2026-03-29T08:00:00.000Z" : null,
       completed_at: null,
-      progress: { total: 3, completed: 1, current_step: "2.1", percentage: 33 },
-      parent: null,
-      depth: 0,
+      progress: { total: 3, completed: 1, skipped: 0, current_step: "2.1", percentage: 33 },
       children: [],
       outputs: [],
-      timing: { estimated_minutes: null, elapsed_minutes: null },
+      steps: [],
+      timing: { elapsed_minutes: null },
       errors: [],
       alerts: [],
       blocked_by: [],
@@ -345,8 +344,6 @@ describe("executeTaskVerify", () => {
     expect(status.revisions.length).toBeGreaterThanOrEqual(1);
     const rev = status.revisions[status.revisions.length - 1];
     expect(rev.type).toBe("status_change");
-    expect(rev.status_before).toBe("running");
-    expect(rev.status_after).toBe("completed");
     expect(rev.trigger).toBe("agent-001");
     expect(rev.summary).toContain("Auto-completed");
   });
@@ -455,12 +452,11 @@ describe("executeTaskVerify - concurrent safety", () => {
       assigned_to: "agent",
       started_at: status === "running" ? new Date().toISOString() : null,
       completed_at: null,
-      progress: { total: 3, completed: 1, current_step: "2.1", percentage: 33 },
-      parent: null,
-      depth: 0,
+      progress: { total: 3, completed: 1, skipped: 0, current_step: "2.1", percentage: 33 },
       children: [],
       outputs: [],
-      timing: { estimated_minutes: null, elapsed_minutes: null },
+      steps: [],
+      timing: { elapsed_minutes: null },
       errors: [],
       alerts: [],
       blocked_by: [],

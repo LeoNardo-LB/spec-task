@@ -39,17 +39,8 @@ function nextAction(d: TaskStatusData): string {
       return `等待阻塞解除: ${d.blocked_by.map((b) => `${b.task}(${b.reason})`).join(", ")}`;
     case "cancelled":
       return "已取消: 无法恢复";
-    case "revised": {
-      // 查找最近的 user_request revision 获取 resume_from（等价于 v1.0）
-      const userRevs = d.revisions.filter(
-        (r) => r.type === "user_request" && r.resume_from,
-      );
-      if (userRevs.length > 0) {
-        const last = userRevs[userRevs.length - 1];
-        return `需要重新规划: 从步骤 ${last.resume_from} 恢复 (${last.summary})`;
-      }
+    case "revised":
       return "需要重新规划: 更新文档后 task_transition running";
-    }
   }
 }
 

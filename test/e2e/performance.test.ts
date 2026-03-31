@@ -30,9 +30,7 @@ describe("E2E: Performance", () => {
       revisions.push({
         id: i + 1, type: "status_change",
         timestamp: new Date(Date.now() + i).toISOString(),
-        trigger: "perf-agent", summary: `Progress ${i + 1}/${N}`, impact: "minor",
-        changes: [], affected_steps: { invalidated: [], modified: [], added: [] },
-        resume_from: "", status_before: "running", status_after: "running",
+        trigger: "perf-agent", summary: `Progress ${i + 1}/${N}`,
         block_type: null, block_reason: null,
       });
     }

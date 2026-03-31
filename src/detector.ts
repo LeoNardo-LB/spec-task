@@ -4,7 +4,6 @@ import YAML from "yaml";
 import type { DetectorResult, SkeletonTask, ArtifactName } from "./types.js";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-const REQUIRED_ARTIFACTS: readonly ArtifactName[] = ["brief", "spec", "plan", "checklist"];
 
 async function safeStat(path: string): Promise<import("fs").Stats | null> {
   try {
@@ -24,7 +23,8 @@ export class Detector {
    * L4 in_progress: 有非终态任务且文档完整
    * L5 all_done:  所有任务都是终态
    */
-  async detect(workspaceDir: string): Promise<DetectorResult> {
+  async detect(workspaceDir: string, requiredArtifacts?: readonly ArtifactName[]): Promise<DetectorResult> {
+    const required: readonly ArtifactName[] = requiredArtifacts ?? ["checklist"];
     const specTaskDir = join(workspaceDir, "spec-task");
 
     // L1: 目录不存在
@@ -75,7 +75,7 @@ export class Detector {
 
       // 检查骨架：status.yaml 存在但缺少关键文档
       const missing: ArtifactName[] = [];
-      for (const artifact of REQUIRED_ARTIFACTS) {
+      for (const artifact of required) {
         const artifactFile = join(taskDir, `${artifact}.md`);
         const exists = await safeStat(artifactFile);
         if (!exists) missing.push(artifact);

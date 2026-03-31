@@ -1,10 +1,9 @@
-import { join } from "path";
 import type { TaskVerifyParams, VerificationCriterion } from "../types.js";
 import { SPEC_TASK_ERRORS } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { StateMachine } from "../core/state-machine.js";
-import { ProgressCalculator } from "../core/progress.js";
 import { RevisionBuilder } from "../core/revision.js";
+import { calculateProgressFromSteps } from "../core/checklist-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskVerifyParamsSchema = {
@@ -84,7 +83,7 @@ export async function executeTaskVerify(
 
     try {
       const result = await store.transaction(task_dir, (data) => {
-        // 按 criterion 文本查找已有记录并更新（等价于 v1.0 行为）
+        // 按 criterion 文本查找已有记录并更新
         const existingIdx = data.verification.criteria.findIndex(
           (c) => c.criterion === action.criterion,
         );
@@ -150,15 +149,15 @@ export async function executeTaskVerify(
           data.status = "completed";
           data.completed_at = new Date().toISOString();
 
-          // 自动计算 elapsed_minutes（等价于 v1.0）
+          // 自动计算 elapsed_minutes
           if (data.started_at) {
             const startMs = new Date(data.started_at).getTime();
             const endMs = Date.now();
             data.timing.elapsed_minutes = Math.round((endMs - startMs) / 60000);
           }
 
-          const pc = new ProgressCalculator();
-          data.progress = await pc.calculate(join(task_dir, "checklist.md"));
+          // 从 steps 计算进度
+          data.progress = calculateProgressFromSteps(data.steps ?? []);
 
           const rb = new RevisionBuilder();
           const rev = rb.build({
@@ -167,8 +166,6 @@ export async function executeTaskVerify(
             trigger: action.verified_by ?? "verification",
             summary: "Auto-completed: all verification criteria passed",
           });
-          rev.status_before = oldStatus;
-          rev.status_after = "completed";
           data.revisions.push(rev);
           autoCompleted = true;
         }

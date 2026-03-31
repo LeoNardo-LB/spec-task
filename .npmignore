@@ -13,3 +13,8 @@ memory/
 /spec-task/
 *.log
 *.tmp
+
+# Dev docs & tool artifacts
+docs/
+.opencode/
+openspec/

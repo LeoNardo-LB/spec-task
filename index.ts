@@ -35,6 +35,14 @@ import {
   ConfigMergeParamsSchema,
   executeConfigMerge,
 } from "./src/tools/config-merge.js";
+import {
+  ChecklistReadParamsSchema,
+  executeChecklistRead,
+} from "./src/tools/checklist-read.js";
+import {
+  ChecklistWriteParamsSchema,
+  executeChecklistWrite,
+} from "./src/tools/checklist-write.js";
 
 export default definePluginEntry({
   id: "spec-task",
@@ -44,7 +52,10 @@ export default definePluginEntry({
   register(api) {
     // ── Hook 注册 ───────────────────────────────────────────
     const detector = new Detector();
-    const pluginConfig = (api.pluginConfig ?? api.config ?? {}) as { enforceOnSubAgents?: boolean };
+    const pluginConfig = (api.pluginConfig ?? api.config ?? {}) as {
+      enforceOnSubAgents?: boolean;
+      interventionLevel?: "low" | "medium" | "high" | "always";
+    };
 
     // 闭包 Map：存储 agentId/sessionKey → workspaceDir 映射
     // PluginHookToolContext（before_tool_call）没有 workspaceDir 字段，
@@ -63,16 +74,24 @@ export default definePluginEntry({
     // 查找优先级：sessionKey > agentId。
     const SPEC_TASK_TOOLS = new Set(["task_create", "config_merge", "task_archive", "task_recall"]);
     api.on("before_tool_call", async (event, ctx) => {
+      // ── 拦截对 checklist.md 的直接写入，强制使用 checklist_write ──
+      if (event.toolName === "write" || event.toolName === "edit") {
+        const filePath = (event.params?.path ?? event.params?.file_path ?? "") as string;
+        if (filePath.endsWith("checklist.md") || filePath.includes("/checklist.md")) {
+          api.logger.info(`[spec-task] before_tool_call: BLOCKED ${event.toolName} to checklist.md — use checklist_write instead`);
+          return {
+            block: true,
+            params: event.params,
+          };
+        }
+      }
+
+      // ── 仅保留 project_root 注入逻辑 ──
       if (!SPEC_TASK_TOOLS.has(event.toolName)) return;
       const params = event.params ?? {};
       if (params.project_root) {
         api.logger.info(`[spec-task] before_tool_call: ${event.toolName} already has project_root=${params.project_root}, skip`);
         return;
-      }
-      // DEBUG: 记录查找过程
-      api.logger.info(`[spec-task] before_tool_call: tool=${event.toolName} agentId=${ctx.agentId} sessionKey=${ctx.sessionKey} mapSize=${workspaceDirMap.size}`);
-      if (workspaceDirMap.size > 0) {
-        api.logger.info(`[spec-task] Map keys: ${[...workspaceDirMap.keys()].join(", ")}`);
       }
       // 从 Map 中查找 workspaceDir
       const workspaceDir =
@@ -86,7 +105,7 @@ export default definePluginEntry({
       return { params: { ...params, project_root: workspaceDir } };
     });
 
-    // ── 工具注册（8 个）──────────────────────────────────────
+    // ── 工具注册（9 个）──────────────────────────────────────
     api.registerTool({
       name: "config_merge",
       description:
@@ -110,7 +129,36 @@ export default definePluginEntry({
     api.registerTool({
       name: "task_create",
       description:
-        "创建新任务并初始化 status.yaml。创建后必须按 brief → spec → plan → checklist 拓扑序填充内容，不允许创建后不填充就进入 running 状态。",
+        "创建 spec-task 任务。创建目录结构、初始化 status.yaml、写入构件文件。" +
+        "\n\n**参数说明：**" +
+        "\n- task_name (必需): kebab-case 任务名称" +
+        "\n- brief (推荐): 任务简报，定义目标和成功标准" +
+        "\n- plan (推荐): 执行计划，说明步骤分解和策略" +
+        "\n- checklist (推荐): 进度追踪清单，后续用 checklist_write 更新进度" +
+        "\n\n**brief 格式参考：**" +
+        "\n## 目标" +
+        "\n一句话概括核心目标。" +
+        "\n## 成功标准" +
+        "\n- 标准1: 可衡量的完成条件" +
+        "\n- 标准2: ..." +
+        "\n## 背景与上下文" +
+        "\n为什么需要做这件事。" +
+        "\n\n**plan 格式参考：**" +
+        "\n## 概述" +
+        "\n整体执行策略。" +
+        "\n## 步骤分解" +
+        "\n### 步骤 1: 名称" +
+        "\n- 做什么 → 为什么 → 预期产出" +
+        "\n### 步骤 2: 名称" +
+        "\n- ..." +
+        "\n\n**checklist 格式参考：**" +
+        "\n## 1. 阶段名称" +
+        "\n- [ ] 1.1 步骤描述" +
+        "\n- [ ] 1.2 步骤描述" +
+        "\n## 2. 阶段名称" +
+        "\n- [ ] 2.1 步骤描述" +
+        "\n\n建议：在调用时同时传入 brief + checklist（或 brief + plan + checklist），" +
+        "\n确保任务有清晰的目标定义和进度追踪。",
       parameters: TaskCreateParamsSchema,
       async execute(_id, params) {
         return executeTaskCreate(_id, params as any);
@@ -164,6 +212,37 @@ export default definePluginEntry({
       parameters: TaskArchiveParamsSchema,
       async execute(_id, params) {
         return executeTaskArchive(_id, params as any);
+      },
+    });
+
+    api.registerTool({
+      name: "checklist_read",
+      description:
+        "全量读取指定任务的 checklist.md 内容和进度统计（只读，不修改任何文件）。返回完整 markdown 内容、进度百分比和未完成步骤。",
+      parameters: ChecklistReadParamsSchema,
+      async execute(_id, params) {
+        return executeChecklistRead(_id, params as any);
+      },
+    });
+
+    api.registerTool({
+      name: "checklist_write",
+      description:
+        `全量覆盖指定任务的 checklist.md 文件。传入完整 markdown 内容，覆盖写入 checklist.md 并自动更新 status.yaml 进度。
+
+**推荐工作流**：先 checklist_read 读取当前状态 → 完成步骤 → checklist_write 写回更新后的完整内容。
+
+**参数说明**：
+- task_dir（必填）：任务目录的绝对路径（task_create 返回的 task_dir）
+- content（必填）：完整的 checklist markdown 内容。全量覆盖，传入什么就存什么。
+
+**典型用法**：
+✅ checklist_read(task_dir) → 修改 content 中的 [ ] 为 [x] → checklist_write(task_dir, content)
+✅ 重新规划任务：直接传入新的完整步骤列表
+✅ 批量打勾：传入的内容中已勾选的步骤会被正确计算进度`,
+      parameters: ChecklistWriteParamsSchema,
+      async execute(_id, params) {
+        return executeChecklistWrite(_id, params as any);
       },
     });
   },

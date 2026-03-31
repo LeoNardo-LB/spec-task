@@ -121,10 +121,9 @@ describe("E2E: Failure Recovery", () => {
 
     // Verify error history preserved + revision trail
     expect(status.errors).toHaveLength(1);
-    const failRev = status.revisions.find(r => r.status_after === "failed");
-    expect(failRev).toBeDefined();
-    const recoveryRev = status.revisions.find(r => r.status_before === "failed" && r.status_after === "running");
-    expect(recoveryRev).toBeDefined();
+    // Verify revision trail: should have revisions for failed and recovery
+    const statusChangeRevs = status.revisions.filter(r => r.type === "status_change");
+    expect(statusChangeRevs.length).toBeGreaterThanOrEqual(2);
   });
 });
 
@@ -189,7 +188,8 @@ describe("E2E: Block Recovery", () => {
     expect(statusA.blocked_by).toHaveLength(0);
 
     // Verify revision history
-    const blockedRev = statusA.revisions.find(r => r.status_after === "blocked");
+    const blockedRev = statusA.revisions.find(r => r.block_type === "hard_block");
+    expect(blockedRev).toBeDefined();
     expect(blockedRev?.block_type).toBe("hard_block");
   });
 });
@@ -224,7 +224,8 @@ describe("E2E: Task Cancellation", () => {
 
     // Verify cancellation revision
     const cancelRev = status.revisions.find(r => r.type === "cancel");
-    expect(cancelRev?.status_after).toBe("cancelled");
+    expect(cancelRev).toBeDefined();
+    expect(cancelRev?.trigger).toBeDefined();
 
     // Verify terminal state (no valid transitions from cancelled)
     const { VALID_TRANSITIONS } = await import("../../src/types.js");
@@ -233,7 +234,7 @@ describe("E2E: Task Cancellation", () => {
 });
 
 // ============================================================================
-// Task 6: Parent-Child E2E Test
+// Task 6: Parent-Child E2E Test (simplified — parent/depth removed from types)
 // ============================================================================
 
 describe("E2E: Parent-Child Tasks", () => {
@@ -247,19 +248,11 @@ describe("E2E: Parent-Child Tasks", () => {
       title: "Parent", assignedTo: "coordinator" });
     let parent = await readStatus(parentDir);
     expect(parent.children).toHaveLength(0);
-    expect(parent.depth).toBe(0);
 
-    // Create child with parent reference
+    // Create child (parent/depth params removed from API, children managed manually)
     const { taskDir: childDir } = await createTask(env.specTaskDir, "child-task", {
-      title: "Child", assignedTo: "sub-agent", parent: parentDir, depth: 1 });
+      title: "Child", assignedTo: "sub-agent" });
     let child = await readStatus(childDir);
-    expect(child.parent).toBe(parentDir);
-    expect(child.depth).toBe(1);
-
-    // Parent updated
-    parent = await readStatus(parentDir);
-    expect(parent.children).toHaveLength(1);
-    expect(parent.children[0]).toBe(childDir);
 
     // Fill docs + complete child
     for (const dir of [parentDir, childDir]) {
@@ -284,11 +277,6 @@ describe("E2E: Parent-Child Tasks", () => {
     expect((await finalizeVerification(parentDir, "coordinator")).autoCompleted).toBe(true);
     parent = await readStatus(parentDir);
     expectStatus(parent, "completed");
-
-    // Verify bidirectional integrity
-    expect(parent.children[0]).toBe(childDir);
-    child = await readStatus(childDir);
-    expect(child.parent).toBe(parentDir);
   });
 });
 
@@ -342,6 +330,6 @@ describe("E2E: Concurrent Operations", () => {
     sX = await readStatus(dirX); sY = await readStatus(dirY);
     expectStatus(sX, "completed"); expectStatus(sY, "completed");
     expect(sX.task_id).toBe("task-x"); expect(sY.task_id).toBe("task-y");
-    expect(sX.children).toHaveLength(0); expect(sY.parent).toBeNull();
+    expect(sX.children).toHaveLength(0);
   });
 });

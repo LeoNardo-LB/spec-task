@@ -2,6 +2,14 @@
 # 项目级覆盖：spec-task/config.yaml（onboarding 生成，可选）
 # 读取优先级：项目 config > skill 内置默认
 
+# 追踪级别：控制 hook 注入的构件要求提醒强度
+# low:    checklist                     — 纯调度/轻量追踪
+# medium: brief + checklist             — 有目标定义 + 追踪
+# high:   brief + plan + checklist      — 需要可解释性的完整任务
+# 编码场景可通过 required_artifacts 显式添加 spec
+tracking:
+  level: medium
+
 context: ""
 
 runtime:
@@ -35,9 +43,6 @@ rules:
   brief:
     - 简报必须包含明确的成功标准
     - 简报必须标注预期执行时间
-  spec:
-    - 每个场景必须有 GIVEN/WHEN/THEN
-    - 至少覆盖一个异常场景
   plan:
     - 必须列出所需的工具或 API
   checklist:

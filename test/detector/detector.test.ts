@@ -42,11 +42,13 @@ describe("Detector", () => {
   });
 
   // L3: skeleton — missing artifacts
+  // 注意：detector.detect() 默认 requiredArtifacts=["checklist"]，
+  // 此测试显式传入完整构件列表以验证多构件缺失检测能力。
   it("should return level 'skeleton' when task has status.yaml but missing brief.md", async () => {
     const taskDir = join(tmpDir, "spec-task", "task-1");
     writeStatus(taskDir, { task_id: "task-1", status: "pending" });
 
-    const result = await detector.detect(tmpDir);
+    const result = await detector.detect(tmpDir, ["brief", "spec", "plan", "checklist"]);
     expect(result.level).toBe("skeleton");
     expect(result.skeleton_tasks).toHaveLength(1);
     expect(result.skeleton_tasks[0].name).toBe("task-1");
@@ -58,7 +60,7 @@ describe("Detector", () => {
     writeStatus(taskDir, { task_id: "task-1", status: "running" });
     writeFileSync(join(taskDir, "brief.md"), "# Brief", "utf-8");
 
-    const result = await detector.detect(tmpDir);
+    const result = await detector.detect(tmpDir, ["brief", "spec", "plan", "checklist"]);
     expect(result.level).toBe("skeleton");
     expect(result.skeleton_tasks[0].missing).toEqual(
       expect.arrayContaining(["spec", "plan", "checklist"])

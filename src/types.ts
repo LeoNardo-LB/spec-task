@@ -10,17 +10,18 @@ export type RevisionType =
   | "created" | "user_request" | "auto_adapt"
   | "verify_retry" | "cancel" | "status_change";
 
-export type ImpactLevel = "minor" | "major" | "full_reset";
-
 export type BlockType = "soft_block" | "hard_block";
 
 export type VerificationStatus = "pending" | "passed" | "failed";
 
-export type ArtifactAction = "added" | "modified" | "removed";
-
 export type ArtifactName = "brief" | "spec" | "plan" | "checklist";
 
+export type TrackingLevel = "low" | "medium" | "high";
+
 export type DetectorLevel = "none" | "empty" | "skeleton" | "in_progress" | "all_done";
+
+/** 步骤状态 */
+export type StepStatus = "pending" | "completed" | "skipped";
 
 // ============================================================================
 // 状态机合法转换（14 条）
@@ -46,15 +47,25 @@ export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
 // 核心数据结构
 // ============================================================================
 
+/** 结构化步骤（status.yaml.steps 数组元素） */
+export interface Step {
+  id: string;
+  text: string;
+  status: StepStatus;
+  completed_at: string | null;
+  tags: string[];
+  skip_reason?: string;
+}
+
 export interface TaskProgress {
   total: number;
   completed: number;
+  skipped: number;
   current_step: string;
   percentage: number;
 }
 
 export interface TaskTiming {
-  estimated_minutes: number | null;
   elapsed_minutes: number | null;
 }
 
@@ -90,30 +101,12 @@ export interface Verification {
   verified_by: string | null;
 }
 
-export interface RevisionChange {
-  artifact: ArtifactName;
-  action: ArtifactAction;
-  detail: string;
-}
-
-export interface AffectedSteps {
-  invalidated: string[];
-  modified: string[];
-  added: string[];
-}
-
 export interface Revision {
   id: number;
   type: RevisionType;
   timestamp: string;
   trigger: string;
   summary: string;
-  impact: ImpactLevel;
-  changes: RevisionChange[];
-  affected_steps: AffectedSteps;
-  resume_from: string;
-  status_before: TaskStatus;
-  status_after: TaskStatus;
   block_type: BlockType | null;
   block_reason: string | null;
 }
@@ -132,10 +125,9 @@ export interface TaskStatusData {
   started_at: string | null;
   completed_at: string | null;
   progress: TaskProgress;
-  parent: string | null;
-  depth: number;
   children: string[];
   outputs: string[];
+  steps: Step[];
   timing: TaskTiming;
   errors: ErrorRecord[];
   alerts: AlertRecord[];
@@ -150,6 +142,10 @@ export interface TaskStatusData {
 
 export interface SpecTaskConfig {
   context?: string;
+  tracking?: {
+    level?: TrackingLevel;
+    required_artifacts?: ArtifactName[];
+  };
   runtime?: {
     allow_agent_self_delegation?: boolean;
     task_timeout?: number;
@@ -198,8 +194,9 @@ export interface TaskCreateParams {
   project_root?: string;
   title?: string;
   assigned_to?: string;
-  parent?: string;
-  depth?: number;
+  brief?: string;
+  plan?: string;
+  checklist?: string;
 }
 
 export interface TaskTransitionParams {
@@ -208,13 +205,9 @@ export interface TaskTransitionParams {
   revision_type?: string;
   trigger?: string;
   summary?: string;
-  impact?: ImpactLevel;
-  resume_from?: string;
   block_type?: BlockType;
   block_reason?: string;
   assigned_to?: string;
-  changes?: RevisionChange[];
-  affected_steps?: AffectedSteps;
 }
 
 export type TaskLogAction =
@@ -222,7 +215,7 @@ export type TaskLogAction =
   | { action: "alert"; type: string; message: string }
   | { action: "add-block"; task: string; reason: string }
   | { action: "remove-block"; task: string }
-  | { action: "output"; path: string }
+  | { action: "output"; path?: string }
   | { action: "retry"; step: string };
 
 export interface TaskLogParams {
@@ -252,6 +245,15 @@ export interface TaskArchiveParams {
   dry_run?: boolean;
 }
 
+export interface ChecklistReadParams {
+  task_dir: string;
+}
+
+export interface ChecklistWriteParams {
+  task_dir: string;
+  content: string;
+}
+
 // ============================================================================
 // 工具返回类型
 // ============================================================================
@@ -266,6 +268,7 @@ export interface TaskCreateResult extends ToolResult {
   task_id: string;
   status: TaskStatus;
   created_dirs: string[];
+  created_artifacts: string[];
 }
 
 export interface TaskTransitionResult extends ToolResult {
@@ -273,6 +276,18 @@ export interface TaskTransitionResult extends ToolResult {
   new_status: TaskStatus;
   progress: TaskProgress;
   revision_id: number;
+}
+
+export interface ChecklistReadResult extends ToolResult {
+  steps: Step[];
+  progress: TaskProgress;
+  content: string | null;
+  checklist_path: string;
+}
+
+export interface ChecklistWriteResult extends ToolResult {
+  task_dir: string;
+  checklist_path: string;
 }
 
 // ============================================================================
@@ -299,6 +314,7 @@ export interface DetectorResult {
 
 export const SPEC_TASK_ERRORS = {
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
+  CHECKLIST_NOT_FOUND: "CHECKLIST_NOT_FOUND",
   TASK_ALREADY_EXISTS: "TASK_ALREADY_EXISTS",
   INVALID_TRANSITION: "INVALID_TRANSITION",
   DUPLICATE_BLOCK: "DUPLICATE_BLOCK",

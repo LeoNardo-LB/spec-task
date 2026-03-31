@@ -1,6 +1,7 @@
 import YAML from "yaml";
 import type { ConfigMergeParams } from "../types.js";
 import { SPEC_TASK_ERRORS } from "../types.js";
+import { FileUtils } from "../file-utils.js";
 import { ConfigManager } from "../core/config.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
@@ -23,6 +24,13 @@ export async function executeConfigMerge(
 
   if (format !== "json" && format !== "yaml") {
     return formatError(SPEC_TASK_ERRORS.CONFIG_NOT_FOUND, `Unsupported format: ${format}`);
+  }
+
+  // 防御：验证 project_root 是 agent workspace 而非项目根目录
+  const fu = new FileUtils();
+  const wsCheck = await fu.validateWorkspacePath(project_root);
+  if (!wsCheck.valid) {
+    return formatError(SPEC_TASK_ERRORS.CONFIG_NOT_FOUND, `Invalid project_root: ${wsCheck.reason}`);
   }
 
   try {
