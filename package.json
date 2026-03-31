@@ -1,5 +1,5 @@
 {
-  "name": "spec-task",
+  "name": "spec-task-system",
   "version": "0.2.0",
   "description": "Structured task management with lifecycle enforcement for OpenClaw",
   "type": "module",
