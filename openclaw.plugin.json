@@ -1,9 +1,9 @@
 {
-  "id": "spec-task",
-  "name": "Spec-Task",
+  "id": "spec-task-system",
+  "name": "Spec-Task System",
   "version": "0.2.0",
   "description": "Structured task management with lifecycle enforcement. Provides 10 tools (config_merge, task_recall, task_create, task_transition, task_log, task_verify, task_resume, task_archive, checklist_read, checklist_write) and hooks (before_prompt_build, before_tool_call) for sub-agent compliance and checklist tracking.",
-  "skills": ["skills/spec-task"],
+  "skills": ["skills/spec-task-system"],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

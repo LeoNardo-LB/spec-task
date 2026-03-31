@@ -1,10 +1,10 @@
 ---
-name: spec-task
+name: spec-task-system
 description: "结构化任务管理与生命周期强制执行。以下场景必须使用：(1) 任何被 coordinator 通过 sessions_spawn 派发的任务 (2) prependContext 要求启动时（基于任务拆分叶子节点数与介入阈值对比）(3) 工作区已存在 spec-task/ 目录且检测到未完成任务时 (4) 用户显式要求使用 spec-task。跳过 spec-task 会导致验收失败。"
 metadata: {}
 ---
 
-# Spec-Task 任务管理
+# Spec-Task System 任务管理
 
 ## 核心原则
 

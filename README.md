@@ -1,9 +1,9 @@
-# Spec-Task
+# Spec-Task System
 
 OpenClaw 结构化任务管理插件，通过状态机和生命周期机制强制执行任务从创建到归档的完整流程。
 
 - **版本**: 0.2.0
-- **插件 ID**: `spec-task`
+- **插件 ID**: `spec-task-system`
 - **类型**: OpenClaw 插件（Tool + Hook + Skill）
 - **最低 Gateway**: `>=2026.3.28`
 
@@ -34,7 +34,7 @@ Hooks (before_prompt_build, before_tool_call)
 Tools (10 个工具)  <-->  Core (状态机 / 状态存储 / Checklist 工具 / 进度计算 / 变更追踪)
   |
   v
-Skill (skills/spec-task/SKILL.md)  --  LLM 读取的结构化行为指南
+Skill (skills/spec-task-system/SKILL.md)  --  LLM 读取的结构化行为指南
 ```
 
 **工作区检测器** 根据当前目录中任务文档的填充程度，将工作区识别为 5 个级别：
@@ -178,7 +178,7 @@ spec-task/
 │   │   └── checklist-write.ts      # 进度写入（markdown → steps 同步）
 │   └── hooks/
 │       └── before-prompt-build.ts  # 双层注入 hook
-└── skills/spec-task/
+└── skills/spec-task-system/
     ├── SKILL.md                    # 技能指南（LLM 读取）
     ├── config.yaml                 # 内置默认配置
     └── schemas/agent-task/         # Schema + 模板
@@ -274,8 +274,8 @@ rules:
 ```json
 {
   "plugins": {
-    "spec-task": {
-      "path": "./extensions/spec-task"
+    "spec-task-system": {
+      "path": "./extensions/spec-task-system"
     }
   }
 }
@@ -284,7 +284,7 @@ rules:
 ### 2. 安装依赖
 
 ```bash
-cd extensions/spec-task
+cd extensions/spec-task-system
 npm install
 ```
 
@@ -347,7 +347,7 @@ npx tsc --noEmit
 
 1. 在 `src/tools/` 下创建工具文件，实现 `ToolExecuteFn` 签名
 2. 在 `index.ts` 的 `registerTools` 中添加注册调用
-3. 在 `skills/spec-task/SKILL.md` 中补充工具使用说明
+3. 在 `skills/spec-task-system/SKILL.md` 中补充工具使用说明
 4. 编写对应测试用例
 
 ### 安全机制
