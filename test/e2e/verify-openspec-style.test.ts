@@ -227,7 +227,7 @@ describe("E2E: openspec-style task_create", () => {
     });
 
     it("prependContext 包含下一步 1.3 和禁止跳过", () => {
-      expect(hookResult.prependContext).toContain("下一个待完成步骤");
+      expect(hookResult.prependContext).toContain("当前阶段待完成步骤");
       expect(hookResult.prependContext).toContain("1.3");
       expect(hookResult.prependContext).toContain("禁止跳过");
     });

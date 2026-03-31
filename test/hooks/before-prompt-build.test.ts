@@ -401,7 +401,7 @@ describe("createPromptBuildHandler", () => {
 
     const ctx = (result as any).prependContext as string;
     expect(ctx).toContain("checklist_write");
-    expect(ctx).toContain("下一个待完成步骤");
+    expect(ctx).toContain("当前阶段待完成步骤");
     expect(ctx).toContain("禁止跳过");
   });
 
@@ -538,7 +538,7 @@ describe("createPromptBuildHandler", () => {
       const ctx = (result as any).prependContext as string;
       expect(ctx).toContain("当前进度");
       expect(ctx).toContain("2/5");
-      expect(ctx).toContain("下一个待完成步骤");
+      expect(ctx).toContain("当前阶段待完成步骤");
       expect(ctx).toContain("3.1");
       expect(ctx).toContain("禁止跳过");
       expect(ctx).toContain("checklist_write");

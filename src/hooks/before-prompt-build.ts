@@ -21,8 +21,8 @@ const CHECKLIST_GUIDE = `## Checklist 进度追踪规则
 - 不要手动编辑 checklist.md 文件，必须使用 checklist_write 工具
 - 未标记跳过的步骤均视为必须完成，不能自行决定跳过`;
 
-/** 打勾提醒（追加到进度摘要末尾，动态填充 {next_step}） */
-const CHECKLIST_REMINDER = `⚠️ 下一个待完成步骤：{next_step}。请先完成该步骤后用 checklist_write 写回。禁止跳过未完成步骤。`;
+/** 打勾提醒（追加到进度摘要末尾，动态填充 {phase_steps}） */
+const CHECKLIST_REMINDER = `⚠️ 当前阶段待完成步骤：{phase_steps}。请按顺序完成后用 checklist_write 写回。禁止跳过未完成步骤。`;
 
 /** 内容缺失提醒（包含 template 格式示例，引导 LLM 补充缺失构件） */
 const SKELETON_FILL_REMINDER = `请在下次 task_create 时传入完整内容，或使用 checklist_write / write 工具补充。
@@ -66,6 +66,8 @@ interface ProgressInfo {
   hasMissingChecklist: boolean;
   /** 下一个待完成的步骤编号（取所有 running 任务中编号最小的未完成步骤） */
   nextStep: string | null;
+  /** 当前阶段所有未完成步骤（与 nextStep 同级，如 nextStep=1.3 则包含 1.3, 1.4, 1.5...） */
+  currentPhaseSteps: string[];
 }
 
 /**
@@ -88,6 +90,7 @@ async function buildProgressSummary(workspaceDir: string): Promise<ProgressInfo>
     const summaryLines: string[] = [];
     let hasMissingChecklist = false;
     let firstUncheckedStep: string | null = null;
+    const allUncheckedSteps: string[] = []; // 跨所有 running 任务收集
 
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
@@ -139,6 +142,7 @@ async function buildProgressSummary(workspaceDir: string): Promise<ProgressInfo>
             completed++;
           } else {
             uncheckedSteps.push(stepMatch[1]);
+            allUncheckedSteps.push(stepMatch[1]);
             if (!firstUncheckedStep) firstUncheckedStep = stepMatch[1];
           }
         }
@@ -151,15 +155,22 @@ async function buildProgressSummary(workspaceDir: string): Promise<ProgressInfo>
       }
     }
 
-    if (summaryLines.length === 0) return { summary: null, hasMissingChecklist, nextStep: firstUncheckedStep };
+    if (summaryLines.length === 0) return { summary: null, hasMissingChecklist, nextStep: firstUncheckedStep, currentPhaseSteps: [] };
+
+    // 筛选当前阶段（与 firstUncheckedStep 同顶级编号）的所有未完成步骤
+    // 例如 firstUncheckedStep=1.3 → 收集所有 1.x 的未完成步骤
+    const currentPhaseSteps = firstUncheckedStep
+      ? allUncheckedSteps.filter(s => s.split(".")[0] === firstUncheckedStep.split(".")[0])
+      : [];
 
     return {
       summary: `\n📋 当前进度：\n${summaryLines.join("\n")}`,
       hasMissingChecklist,
       nextStep: firstUncheckedStep,
+      currentPhaseSteps,
     };
   } catch {
-    return { summary: null, hasMissingChecklist: false, nextStep: null };
+    return { summary: null, hasMissingChecklist: false, nextStep: null, currentPhaseSteps: [] };
   }
 }
 
@@ -273,7 +284,7 @@ export function createPromptBuildHandler(
         const parts: string[] = [warning];
         if (progress.summary) {
           parts.push(progress.summary);
-          parts.push(CHECKLIST_REMINDER.replace("{next_step}", progress.nextStep ?? "未知"));
+          parts.push(CHECKLIST_REMINDER.replace("{phase_steps}", progress.currentPhaseSteps.join(", ")));
         }
         if (progress.hasMissingChecklist) parts.push(MISSING_CHECKLIST_ALERT);
         return {
@@ -287,7 +298,7 @@ export function createPromptBuildHandler(
         const parts: string[] = [];
         if (progress.summary) {
           parts.push(progress.summary);
-          parts.push(CHECKLIST_REMINDER.replace("{next_step}", progress.nextStep ?? "未知"));
+          parts.push(CHECKLIST_REMINDER.replace("{phase_steps}", progress.currentPhaseSteps.join(", ")));
         }
         if (progress.hasMissingChecklist) parts.push(MISSING_CHECKLIST_ALERT);
         if (parts.length === 0) return {};
