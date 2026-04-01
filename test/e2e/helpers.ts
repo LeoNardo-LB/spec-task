@@ -38,21 +38,20 @@ export async function readStatus(taskDir: string): Promise<TaskStatusData> {
   return YAML.parse(content) as TaskStatusData;
 }
 
-/** 写入文档或 checklist */
+/** 写入文档到指定目录 */
 export async function writeFile_(
-  taskDir: string, filename: string, content: string
+  dir: string, filename: string, content: string
 ): Promise<void> {
-  await writeFile(join(taskDir, filename), content, "utf-8");
+  await writeFile(join(dir, filename), content, "utf-8");
 }
 
 export const writeArtifact = writeFile_;
-export const writeChecklist = writeFile_;
 
 /** 在 status.yaml 上执行状态转换（模拟 task_transition） */
 export async function transitionTask(
   taskDir: string, newStatus: TaskStatus,
   opts: { summary?: string; revisionType?: string; trigger?: string;
-    assignedTo?: string; blockType?: "soft_block" | "hard_block"; blockReason?: string } = {}
+    assignedTo?: string } = {}
 ): Promise<void> {
   const content = await readFile(join(taskDir, "status.yaml"), "utf-8");
   const data = YAML.parse(content) as TaskStatusData;
@@ -69,7 +68,6 @@ export async function transitionTask(
     id: revId, type: (opts.revisionType ?? "status_change") as RevisionType,
     timestamp: data.updated, trigger: opts.trigger ?? "e2e-test",
     summary: opts.summary ?? `${oldStatus} → ${newStatus}`,
-    block_type: opts.blockType ?? null, block_reason: opts.blockReason ?? null,
   });
   await writeFile(join(taskDir, "status.yaml"), YAML.stringify(data), "utf-8");
 }
@@ -115,7 +113,7 @@ export async function addCriterion(
 
 export async function finalizeVerification(
   taskDir: string, verifiedBy = "e2e-test"
-): Promise<{ autoCompleted: boolean }> {
+): Promise<{ autoCompleted: boolean; autoCompleteSkippedReason?: string }> {
   const content = await readFile(join(taskDir, "status.yaml"), "utf-8");
   const data = YAML.parse(content) as TaskStatusData;
   const allPassed = data.verification.criteria.length > 0
@@ -123,45 +121,71 @@ export async function finalizeVerification(
   data.verification.status = allPassed ? "passed" : "failed";
   data.verification.verified_at = new Date().toISOString();
   data.verification.verified_by = verifiedBy;
+
+  // 检查 steps 完整性（与 executeTaskVerify 行为一致）
+  const steps = (data.steps ?? []) as Array<{ status: string }>;
+  const hasIncompleteSteps = steps.length === 0 || steps.some(s => s.status !== "completed" && s.status !== "skipped");
+
   let autoCompleted = false;
   if (allPassed && data.status === "running") {
-    data.status = "completed"; data.completed_at = data.updated; autoCompleted = true;
-    const revId = data.revisions.length > 0
-      ? Math.max(...data.revisions.map((r: any) => r.id)) + 1 : 1;
-    data.revisions.push({
-      id: revId, type: "status_change", timestamp: data.updated, trigger: "task_verify",
-      summary: "Auto-completed: all verification criteria passed",
-      block_type: null, block_reason: null,
-    });
+    if (hasIncompleteSteps) {
+      // Steps 不完整，不自动推进 status
+      autoCompleted = false;
+      await writeFile(join(taskDir, "status.yaml"), YAML.stringify(data), "utf-8");
+      return { autoCompleted: false, autoCompleteSkippedReason: "任务没有完整的步骤数据（steps 为空或存在未完成的步骤），不自动推进状态" };
+    } else {
+      data.status = "completed"; data.completed_at = data.updated; autoCompleted = true;
+      const revId = data.revisions.length > 0
+        ? Math.max(...data.revisions.map((r: any) => r.id)) + 1 : 1;
+      data.revisions.push({
+        id: revId, type: "status_change", timestamp: data.updated, trigger: "task_verify",
+        summary: "Auto-completed: all verification criteria passed",
+      });
+    }
   }
   await writeFile(join(taskDir, "status.yaml"), YAML.stringify(data), "utf-8");
   return { autoCompleted };
 }
 
-/** 创建任务（模拟 task_create） */
+/**
+ * 创建任务（模拟 task_create）。
+ *
+ * v0.3.0 目录结构：
+ *   taskRoot = specTaskDir/<name>/        ← brief.md, plan.md 等构件
+ *   taskDir  = taskRoot/runs/001/          ← status.yaml
+ *
+ * 返回 taskRoot（构件写入）和 taskDir（状态操作）。
+ */
 export async function createTask(
   specTaskDir: string, taskName: string,
-  opts: { title?: string; assignedTo?: string } = {}
-): Promise<{ taskDir: string; taskId: string }> {
-  const taskDir = join(specTaskDir, taskName);
-  await mkdir(taskDir, { recursive: true });
+  opts: { title?: string; assignedTo?: string; brief?: string } = {}
+): Promise<{ taskRoot: string; taskDir: string; taskId: string }> {
+  const taskRoot = join(specTaskDir, taskName);
+  const runDir = join(taskRoot, "runs", "001");
+  await mkdir(runDir, { recursive: true });
+
+  // 写入 brief.md 到任务根目录
+  if (opts.brief) {
+    await writeFile(join(taskRoot, "brief.md"), opts.brief, "utf-8");
+  }
+
   const now = new Date().toISOString();
   const statusData: TaskStatusData = {
     task_id: taskName, title: opts.title ?? taskName, created: now, updated: now,
     status: "pending", assigned_to: opts.assignedTo ?? "",
     started_at: null, completed_at: null,
+    run_id: "001",
     progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
-    children: [], outputs: [], steps: [],
-    timing: { elapsed_minutes: null },
-    errors: [], alerts: [], blocked_by: [],
+    outputs: [], steps: [],
+    errors: [], blocked_by: [],
     verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
     revisions: [{
       id: 1, type: "created", timestamp: now, trigger: opts.assignedTo ?? "e2e-test",
-      summary: "Task created", block_type: null, block_reason: null,
+      summary: "Task created",
     }],
   };
-  await writeFile(join(taskDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
-  return { taskDir, taskId: taskName };
+  await writeFile(join(runDir, "status.yaml"), YAML.stringify(statusData), "utf-8");
+  return { taskRoot, taskDir: runDir, taskId: taskName };
 }
 
 export function expectStatus(data: TaskStatusData, status: TaskStatus): void {

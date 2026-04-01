@@ -1,10 +1,10 @@
 import { join } from "path";
-import { writeFile } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
 import type { TaskCreateParams, TaskStatusData, TaskCreateResult } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { RevisionBuilder } from "../core/revision.js";
 import { FileUtils } from "../file-utils.js";
-import { markdownToSteps, syncStepsToStatus } from "../core/checklist-utils.js";
+import { getNextRunId, getActiveRuns, resolveRunDir, resolveTaskRoot } from "../core/run-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskCreateParamsSchema = {
@@ -21,18 +21,19 @@ export const TaskCreateParamsSchema = {
     },
     plan: {
       type: "string",
-      description: "执行计划：说明步骤分解和策略。格式：## 概述\n...\n## 步骤分解\n...",
-    },
-    checklist: {
-      type: "string",
-      description: "进度追踪清单：markdown checkbox 列表。格式：## 1. 阶段\n- [ ] 1.1 步骤\n...",
+      description: "执行计划：说明策略、关键决策、步骤分解和依赖。格式：## Strategy\n...\n## Key Decisions\n...\n## Steps Overview\n...",
     },
   },
 };
 
 /**
  * task_create 工具实现。
- * 创建目录结构 → 初始化 status.yaml → 写入构件内容 → 创建 revision。
+ *
+ * 行为矩阵：
+ * 1. 任务不存在 → 创建任务目录 + runs/001/ + 写入 brief/plan + 创建 status.yaml
+ * 2. 任务存在 + 所有 runs 终态 → 更新 brief/plan（如有）+ 创建 runs/NEXT/status.yaml
+ * 3. 任务存在 + 有活跃 runs → 错误 "task has active runs"
+ * 4. 任务不存在 + 无 brief → 错误 "brief is required for new task"
  */
 export async function executeTaskCreate(
   _id: string,
@@ -45,7 +46,6 @@ export async function executeTaskCreate(
     assigned_to = "agent",
     brief,
     plan,
-    checklist,
   } = params;
 
   // 1. 参数校验
@@ -64,72 +64,100 @@ export async function executeTaskCreate(
 
   const store = new StatusStore();
   const rb = new RevisionBuilder();
-  const taskDir = fu.resolveTaskDir(task_name, project_root);
+  const taskRoot = resolveTaskRoot(task_name, project_root);
 
-  // 2. 检查重复
-  if (await fu.safeStat(join(taskDir, "status.yaml")))
-    return formatError("TASK_ALREADY_EXISTS", `Task '${task_name}' already exists at ${taskDir}`);
+  // 2. 判断任务是否已存在
+  const taskExists = await fu.safeStat(taskRoot);
 
-  // 3. 创建任务目录
-  await fu.ensureDir(taskDir);
-
-  // 4. 从 checklist 解析 steps
-  let steps: import("../types.js").Step[] = [];
-  let progress: import("../types.js").TaskProgress = { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 };
-
-  if (checklist) {
-    steps = markdownToSteps(checklist);
-    const { calculateProgressFromSteps } = await import("../core/checklist-utils.js");
-    progress = calculateProgressFromSteps(steps);
+  if (!taskExists) {
+    // 场景 4：新任务必须提供 brief
+    if (!brief) {
+      return formatError("INVALID_PARAMS", "brief is required for new task");
+    }
   }
 
-  // 5. 构建初始 status
+  if (taskExists) {
+    // 场景 3：检查是否有活跃 runs
+    const activeRuns = await getActiveRuns(taskRoot);
+    if (activeRuns.length > 0) {
+      return formatError(
+        "TASK_HAS_ACTIVE_RUNS",
+        `Task '${task_name}' has active run(s): ${activeRuns.join(", ")}. Complete or cancel them before creating a new run.`,
+      );
+    }
+
+    // 场景 2：所有 runs 终态，可以创建新 run
+    // 如提供了 brief/plan，更新任务根目录的构件
+    if (brief) {
+      await writeFile(join(taskRoot, "brief.md"), brief, "utf-8");
+    }
+    if (plan) {
+      await writeFile(join(taskRoot, "plan.md"), plan, "utf-8");
+    }
+  } else {
+    // 场景 1：新任务，创建任务根目录
+    await fu.ensureDir(taskRoot);
+
+    // 写入 brief.md 和 plan.md 到任务根目录
+    if (brief) {
+      await writeFile(join(taskRoot, "brief.md"), brief, "utf-8");
+    }
+    if (plan) {
+      await writeFile(join(taskRoot, "plan.md"), plan, "utf-8");
+    }
+  }
+
+  // 3. 获取下一个 run ID 并创建 run 目录
+  const runId = await getNextRunId(taskRoot);
+  const runDir = resolveRunDir(task_name, runId, project_root);
+  await mkdir(runDir, { recursive: true });
+
+  // 4. 构建初始 status（不含 steps，steps 由 steps_update 写入）
   const now = new Date().toISOString();
   const initialData: TaskStatusData = {
-    task_id: task_name, title, created: now, updated: now,
-    status: "pending", assigned_to,
-    started_at: null, completed_at: null,
-    progress,
-    steps,
-    children: [], outputs: [],
-    timing: { elapsed_minutes: null },
-    errors: [], alerts: [], blocked_by: [],
+    task_id: task_name,
+    title,
+    created: now,
+    updated: now,
+    status: "pending",
+    assigned_to,
+    run_id: runId,
+    started_at: null,
+    completed_at: null,
+    progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
+    steps: [],
+    outputs: [],
+    errors: [],
+    blocked_by: [],
     verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
     revisions: [],
   };
 
-  // 6. 创建 revision + 保存
-  const revision = rb.build({ data: initialData, type: "created", trigger: assigned_to, summary: `Task '${task_name}' created` });
+  // 5. 创建 revision + 保存 status.yaml 到 runDir
+  const revisionSummary = taskExists
+    ? `New run ${runId} created for task '${task_name}'`
+    : `Task '${task_name}' created with run ${runId}`;
+  const revision = rb.build({
+    data: initialData,
+    type: "created",
+    trigger: assigned_to,
+    summary: revisionSummary,
+  });
   initialData.revisions.push(revision);
-  await store.saveStatus(taskDir, initialData);
+  await store.saveStatus(runDir, initialData);
 
-  // 7. 写入 LLM 传入的构件内容
+  // 6. 收集创建信息
   const createdArtifacts: string[] = [];
-
-  if (brief) {
-    const filePath = join(taskDir, "brief.md");
-    await writeFile(filePath, brief, "utf-8");
-    createdArtifacts.push("brief");
-  }
-
-  if (plan) {
-    const filePath = join(taskDir, "plan.md");
-    await writeFile(filePath, plan, "utf-8");
-    createdArtifacts.push("plan");
-  }
-
-  if (checklist) {
-    const filePath = join(taskDir, "checklist.md");
-    await writeFile(filePath, checklist, "utf-8");
-    createdArtifacts.push("checklist");
-  }
+  if (brief) createdArtifacts.push("brief");
+  if (plan) createdArtifacts.push("plan");
 
   return formatResult({
     success: true,
-    task_dir: taskDir,
+    task_dir: runDir,
     task_id: task_name,
     status: "pending",
-    created_dirs: [taskDir],
+    run_id: runId,
+    created_dirs: [taskRoot, runDir],
     created_artifacts: createdArtifacts,
   } satisfies TaskCreateResult);
 }

@@ -74,11 +74,13 @@ describe("E2E: Agent Workspace 隔离", () => {
         task_name: "test-coord-task",
         title: "Coordinator测试",
         project_root: AGENTS.coordinator,
+        brief: "## 目标\nCoordinator workspace 测试",
       });
       const text = (response as any)?.content?.[0]?.text ?? JSON.stringify(response);
       const result = JSON.parse(typeof text === "string" ? text : JSON.stringify(text));
       expect(result.success).toBe(true);
       expect(result.task_dir).toContain("agents/coordinator/spec-task/test-coord-task");
+      expect(result.task_dir).toContain("runs/001");
       expect(existsSync(join(result.task_dir, "status.yaml"))).toBe(true);
     });
 
@@ -87,11 +89,13 @@ describe("E2E: Agent Workspace 隔离", () => {
         task_name: "test-tech-task",
         title: "Tech测试",
         project_root: AGENTS["technical-analyst"],
+        brief: "## 目标\nTech workspace 测试",
       });
       const text = (response as any)?.content?.[0]?.text ?? JSON.stringify(response);
       const result = JSON.parse(typeof text === "string" ? text : JSON.stringify(text));
       expect(result.success).toBe(true);
       expect(result.task_dir).toContain("agents/technical-analyst/spec-task/test-tech-task");
+      expect(result.task_dir).toContain("runs/001");
       expect(existsSync(join(result.task_dir, "status.yaml"))).toBe(true);
     });
 
@@ -99,6 +103,7 @@ describe("E2E: Agent Workspace 隔离", () => {
       await executeTaskCreate("t3", {
         task_name: "test-isolated-task",
         project_root: AGENTS.coordinator,
+        brief: "## 目标\n隔离测试",
       });
       // 任务创建在 agents/coordinator/spec-task/ 下，项目根目录不应有 spec-task/
       expect(existsSync(join(PROJECT, "spec-task"))).toBe(false);
@@ -139,6 +144,7 @@ describe("E2E: Agent Workspace 隔离", () => {
       await executeTaskCreate("t4", {
         task_name: "detect-test",
         project_root: AGENTS.coordinator,
+        brief: "## 目标\n检测测试",
       });
 
       const detector = new Detector();
@@ -152,9 +158,10 @@ describe("E2E: Agent Workspace 隔离", () => {
       await executeTaskCreate("t5", {
         task_name: "complete-task",
         project_root: AGENTS.coordinator,
+        brief: "## 目标\n完整文档测试",
       });
       const taskDir = join(AGENTS.coordinator, "spec-task", "complete-task");
-      for (const doc of ["brief.md", "spec.md", "plan.md", "checklist.md"]) {
+      for (const doc of ["spec.md", "plan.md"]) {
         writeFileSync(join(taskDir, doc), `# ${doc}\nTest content\n`);
       }
 

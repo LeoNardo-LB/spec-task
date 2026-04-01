@@ -7,14 +7,11 @@ export type TaskStatus =
   | "completed" | "failed" | "blocked" | "cancelled" | "revised";
 
 export type RevisionType =
-  | "created" | "user_request" | "auto_adapt"
-  | "verify_retry" | "cancel" | "status_change";
-
-export type BlockType = "soft_block" | "hard_block";
+  | "created" | "status_change";
 
 export type VerificationStatus = "pending" | "passed" | "failed";
 
-export type ArtifactName = "brief" | "spec" | "plan" | "checklist";
+export type ArtifactName = "brief" | "spec" | "plan";
 
 export type TrackingLevel = "low" | "medium" | "high";
 
@@ -47,10 +44,18 @@ export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
 // 核心数据结构
 // ============================================================================
 
+/** 步骤摘要信息 */
+export interface StepSummary {
+  title: string;
+  content: string;
+  approach: string;
+  sources: string[];
+}
+
 /** 结构化步骤（status.yaml.steps 数组元素） */
 export interface Step {
   id: string;
-  text: string;
+  summary: StepSummary;
   status: StepStatus;
   completed_at: string | null;
   tags: string[];
@@ -65,20 +70,10 @@ export interface TaskProgress {
   percentage: number;
 }
 
-export interface TaskTiming {
-  elapsed_minutes: number | null;
-}
-
 export interface ErrorRecord {
   step: string;
   message: string;
   retry_count: number;
-  timestamp: string;
-}
-
-export interface AlertRecord {
-  type: string;
-  message: string;
   timestamp: string;
 }
 
@@ -107,8 +102,6 @@ export interface Revision {
   timestamp: string;
   trigger: string;
   summary: string;
-  block_type: BlockType | null;
-  block_reason: string | null;
 }
 
 // ============================================================================
@@ -122,15 +115,13 @@ export interface TaskStatusData {
   updated: string;
   status: TaskStatus;
   assigned_to: string;
+  run_id: string;
   started_at: string | null;
   completed_at: string | null;
   progress: TaskProgress;
-  children: string[];
   outputs: string[];
   steps: Step[];
-  timing: TaskTiming;
   errors: ErrorRecord[];
-  alerts: AlertRecord[];
   blocked_by: BlockRecord[];
   verification: Verification;
   revisions: Revision[];
@@ -171,6 +162,9 @@ export interface SpecTaskConfig {
     record_history?: boolean;
     generate_lessons?: boolean;
   };
+  completion?: {
+    requires_verification?: boolean;  // 默认 true
+  };
 }
 
 // ============================================================================
@@ -196,7 +190,6 @@ export interface TaskCreateParams {
   assigned_to?: string;
   brief?: string;
   plan?: string;
-  checklist?: string;
 }
 
 export interface TaskTransitionParams {
@@ -205,14 +198,11 @@ export interface TaskTransitionParams {
   revision_type?: string;
   trigger?: string;
   summary?: string;
-  block_type?: BlockType;
-  block_reason?: string;
   assigned_to?: string;
 }
 
 export type TaskLogAction =
   | { action: "error"; step: string; message: string }
-  | { action: "alert"; type: string; message: string }
   | { action: "add-block"; task: string; reason: string }
   | { action: "remove-block"; task: string }
   | { action: "output"; path?: string }
@@ -245,13 +235,18 @@ export interface TaskArchiveParams {
   dry_run?: boolean;
 }
 
-export interface ChecklistReadParams {
+export interface StepsUpdateParams {
+  task_dir: string;
+  steps: Step[];
+}
+
+export interface StepsReadParams {
   task_dir: string;
 }
 
-export interface ChecklistWriteParams {
+export interface TaskInstructionsParams {
   task_dir: string;
-  content: string;
+  artifact_id: string;
 }
 
 // ============================================================================
@@ -267,6 +262,7 @@ export interface TaskCreateResult extends ToolResult {
   task_dir: string;
   task_id: string;
   status: TaskStatus;
+  run_id: string;
   created_dirs: string[];
   created_artifacts: string[];
 }
@@ -278,16 +274,28 @@ export interface TaskTransitionResult extends ToolResult {
   revision_id: number;
 }
 
-export interface ChecklistReadResult extends ToolResult {
-  steps: Step[];
+export interface StepsUpdateResult extends ToolResult {
+  task_dir: string;
   progress: TaskProgress;
-  content: string | null;
-  checklist_path: string;
+  all_steps_completed?: boolean;
+  suggested_action?: string;
+  next_action_hint?: string;
 }
 
-export interface ChecklistWriteResult extends ToolResult {
+export interface StepsReadResult extends ToolResult {
+  steps: Step[];
+  progress: TaskProgress;
   task_dir: string;
-  checklist_path: string;
+}
+
+export interface TaskInstructionsResult extends ToolResult {
+  artifact_id: string;
+  instruction: string;
+  template: string;
+  context: string;
+  rules: string[];
+  dependencies: Array<{ id: string; done: boolean; content: string | null }>;
+  available_artifacts: string[];
 }
 
 // ============================================================================
@@ -314,7 +322,6 @@ export interface DetectorResult {
 
 export const SPEC_TASK_ERRORS = {
   TASK_NOT_FOUND: "TASK_NOT_FOUND",
-  CHECKLIST_NOT_FOUND: "CHECKLIST_NOT_FOUND",
   TASK_ALREADY_EXISTS: "TASK_ALREADY_EXISTS",
   INVALID_TRANSITION: "INVALID_TRANSITION",
   DUPLICATE_BLOCK: "DUPLICATE_BLOCK",
@@ -323,8 +330,6 @@ export const SPEC_TASK_ERRORS = {
   NO_CRITERIA: "NO_CRITERIA",
   CONFIG_NOT_FOUND: "CONFIG_NOT_FOUND",
 } as const;
-
-export type SpecTaskErrorCode = (typeof SPEC_TASK_ERRORS)[keyof typeof SPEC_TASK_ERRORS];
 
 // ============================================================================
 // 辅助：身份文件列表（配置自动生成用）
@@ -337,3 +342,45 @@ export const CONTEXT_FILES = [
   "README.md",
   "CLAUDE.md",
 ] as const;
+
+// ============================================================================
+// SchemaReader 类型
+// ============================================================================
+
+/** schema.yaml 中单个 artifact 的定义 */
+export interface SchemaArtifact {
+  id: string;
+  generates: string;
+  description: string;
+  template: string;
+  instruction: string;
+  requires: string[];
+}
+
+/** 推断出的构件状态 */
+export type ArtifactState = "done" | "ready" | "blocked";
+
+/** 构件状态查询结果 */
+export interface ArtifactStatus {
+  id: string;
+  state: ArtifactState;
+  generates: string;
+}
+
+/** getInstructions 返回的完整指导 */
+export interface ArtifactInstructions {
+  artifact_id: string;
+  instruction: string;
+  template: string;
+  context: string;
+  rules: string[];
+  dependencies: Array<{ id: string; done: boolean; content: string | null }>;
+}
+
+/** SchemaReader 完整状态（等价于 openspec status --json） */
+export interface SchemaStatusResult {
+  artifacts: ArtifactStatus[];
+  nextReady: string[];
+  completed: string[];
+  hasCycle: boolean;
+}

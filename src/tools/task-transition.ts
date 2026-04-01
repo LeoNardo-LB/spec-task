@@ -7,8 +7,9 @@ import type {
 import { StatusStore } from "../core/status-store.js";
 import { StateMachine } from "../core/state-machine.js";
 import { RevisionBuilder } from "../core/revision.js";
-import { calculateProgressFromSteps } from "../core/checklist-utils.js";
+import { calculateProgressFromSteps, readCompletionConfig } from "../core/steps-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
+import { VALID_TRANSITIONS } from "../types.js";
 
 export const TaskTransitionParamsSchema = {
   type: "object",
@@ -23,8 +24,6 @@ export const TaskTransitionParamsSchema = {
     revision_type: { type: "string", description: "Revision type (default: 'status_change')" },
     trigger: { type: "string", description: "Who triggered the transition" },
     summary: { type: "string", description: "Transition summary" },
-    block_type: { type: "string", enum: ["soft_block", "hard_block"], description: "Block type" },
-    block_reason: { type: "string", description: "Block reason" },
     assigned_to: { type: "string", description: "Reassign to agent" },
   },
 };
@@ -47,14 +46,37 @@ export async function executeTaskTransition(
   try { currentData = await store.loadStatus(task_dir); }
   catch { return formatError("TASK_NOT_FOUND", `Task not found at ${task_dir}`); }
 
-  if (!sm.isValidTransition(currentData.status, newStatus))
+  if (!sm.isValidTransition(currentData.status, newStatus)) {
+    try {
+      sm.validate(currentData.status, newStatus);
+    } catch (e) {
+      return formatError("INVALID_TRANSITION", e instanceof Error ? e.message : String(e));
+    }
     return formatError("INVALID_TRANSITION", `Invalid transition: ${currentData.status} → ${newStatus}`);
+  }
 
   // 2. 锁内执行
   try {
     const txResult = await store.transaction(task_dir, async (data) => {
       if (!sm.isValidTransition(data.status, newStatus))
         throw new Error(`CONCURRENT_INVALID_TRANSITION:${data.status} → ${newStatus}`);
+
+      // 兜底校验：completed 前检查 verification 状态
+      if (newStatus === "completed") {
+        const completionConfig = readCompletionConfig(task_dir);
+        if (completionConfig.requires_verification !== false) {
+          const verifStatus = data.verification?.status;
+          if (verifStatus !== "passed") {
+            const criteria = data.verification?.criteria ?? [];
+            const passedCount = criteria.filter((c: { result: string }) => c.result === "passed").length;
+            throw new Error(
+              `Cannot complete task: verification status is '${verifStatus ?? "undefined"}'. ` +
+              `Call task_verify(finalize) first. ` +
+              `Current verification: ${criteria.length} criteria, ${passedCount} passed.`,
+            );
+          }
+        }
+      }
 
       const oldStatus = data.status;
       data.status = newStatus;
@@ -64,13 +86,6 @@ export async function executeTaskTransition(
         data.started_at = new Date().toISOString();
       if (newStatus === "completed" || newStatus === "cancelled")
         data.completed_at = new Date().toISOString();
-
-      // 自动计算 elapsed_minutes
-      if ((newStatus === "completed" || newStatus === "cancelled") && data.started_at) {
-        const startMs = new Date(data.started_at).getTime();
-        const endMs = Date.now();
-        data.timing.elapsed_minutes = Math.round((endMs - startMs) / 60000);
-      }
 
       // 从 steps 计算进度
       data.progress = calculateProgressFromSteps(data.steps ?? []);
@@ -82,7 +97,6 @@ export async function executeTaskTransition(
           data, type: (revisionOpts.revision_type as RevisionType) ?? "status_change",
           trigger: revisionOpts.trigger ?? "agent",
           summary: revisionOpts.summary ?? `${oldStatus} → ${newStatus}`,
-          blockType: revisionOpts.block_type, blockReason: revisionOpts.block_reason,
         });
         data.revisions.push(rev);
         revisionId = rev.id;
@@ -94,8 +108,15 @@ export async function executeTaskTransition(
 
     return formatResult({ success: true, ...txResult } satisfies TaskTransitionResult);
   } catch (e) {
-    if (e instanceof Error && e.message.startsWith("CONCURRENT_INVALID_TRANSITION:"))
-      return formatError("INVALID_TRANSITION", `Concurrent modification: ${e.message.slice(37)}`);
+    if (e instanceof Error && e.message.startsWith("CONCURRENT_INVALID_TRANSITION:")) {
+      const concurrentFrom = e.message.slice(37).split(" → ")[0];
+      const allowed = (VALID_TRANSITIONS as Record<string, string[]>)[concurrentFrom];
+      const allowedList = allowed ? allowed.join(", ") : "none";
+      return formatError(
+        "INVALID_TRANSITION",
+        `Concurrent modification: task status changed to ${concurrentFrom}. Allowed transitions: [${allowedList}]`,
+      );
+    }
     return formatError("INTERNAL_ERROR", e instanceof Error ? e.message : String(e));
   }
 }

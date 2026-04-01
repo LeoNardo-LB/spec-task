@@ -1,4 +1,4 @@
-import type { TaskLogParams, ErrorRecord, AlertRecord, BlockRecord } from "../types.js";
+import type { TaskLogParams, ErrorRecord, BlockRecord } from "../types.js";
 import { SPEC_TASK_ERRORS } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { resolve } from "path";
@@ -9,11 +9,11 @@ export const TaskLogParamsSchema = {
   required: ["task_dir", "action"],
   properties: {
     task_dir: { type: "string", description: "Task directory path (required)" },
-    action: {
-      type: "object",
-      required: ["action"],
-      properties: {
-        action: { type: "string", enum: ["error", "alert", "add-block", "remove-block", "output", "retry"] },
+        action: {
+          type: "object",
+          required: ["action"],
+          properties: {
+            action: { type: "string", enum: ["error", "add-block", "remove-block", "output", "retry"] },
         step: { type: "string" },
         message: { type: "string" },
         type: { type: "string" },
@@ -31,7 +31,7 @@ function typedError(code: string, message: string): Error {
 
 /**
  * task_log 工具实现。
- * 6 个子命令：error / alert / add-block / remove-block / output / retry。
+ * 5 个子命令：error / add-block / remove-block / output / retry。
  * 所有写操作在 transaction 内完成，保证并发安全。
  */
 export async function executeTaskLog(
@@ -62,17 +62,6 @@ export async function executeTaskLog(
           };
           data.errors.push(record);
           return { success: true, action: "error", step: action.step, total_errors: data.errors.length };
-        }
-
-        // ── alert ──────────────────────────────────────────────
-        case "alert": {
-          const record: AlertRecord = {
-            type: action.type,
-            message: action.message,
-            timestamp: new Date().toISOString(),
-          };
-          data.alerts.push(record);
-          return { success: true, action: "alert", type: action.type };
         }
 
         // ── add-block ──────────────────────────────────────────

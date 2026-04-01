@@ -2,7 +2,6 @@ import type {
   TaskStatusData,
   Revision,
   RevisionType,
-  BlockType,
 } from "../types.js";
 
 export class RevisionBuilder {
@@ -23,10 +22,8 @@ export class RevisionBuilder {
     type: RevisionType;
     trigger?: string;
     summary?: string;
-    blockType?: BlockType;
-    blockReason?: string;
   }): Revision {
-    const { data, type, trigger = "", summary = "", blockType, blockReason } = options;
+    const { data, type, trigger = "", summary = "" } = options;
 
     return {
       id: this.nextId(data),
@@ -34,8 +31,6 @@ export class RevisionBuilder {
       timestamp: new Date().toISOString(),
       trigger,
       summary,
-      block_type: blockType ?? null,
-      block_reason: blockReason ?? null,
     };
   }
 }

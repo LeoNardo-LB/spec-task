@@ -18,6 +18,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "vitest run test/e2e/",
+    "test:e2e:cli": "node test/e2e/v030-cli-runner.mjs",
+    "test:e2e:cli:steps": "node test/e2e/v030-cli-runner.mjs steps-io",
+    "test:e2e:cli:runs": "node test/e2e/v030-cli-runner.mjs runs-iso",
+    "test:e2e:cli:lifecycle": "node test/e2e/v030-cli-runner.mjs lifecycle",
+    "test:e2e:cli:spec": "node test/e2e/v030-cli-runner.mjs spec-extract",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

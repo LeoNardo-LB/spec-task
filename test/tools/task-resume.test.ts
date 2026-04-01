@@ -33,13 +33,11 @@ describe("executeTaskResume", () => {
       assigned_to: "agent-1",
       started_at: null,
       completed_at: null,
+      run_id: "001",
       progress: { total: 5, completed: 2, skipped: 0, current_step: "3.1", percentage: 40 },
-      children: [],
       outputs: ["/path/to/output.txt"],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
       revisions: [],
@@ -215,8 +213,6 @@ describe("executeTaskResume", () => {
         timestamp: "2026-03-29T00:00:00.000Z",
         trigger: "agent-1",
         summary: "Task created",
-        block_type: null,
-        block_reason: null,
       },
     ];
     const taskDir = createTaskWithStatus("running", { revisions });
@@ -229,43 +225,16 @@ describe("executeTaskResume", () => {
     expect(data.revisions[0].type).toBe("created");
   });
 
-  it("should include children list in result", async () => {
-    const childDir = join(tmpDir, "child-task");
-    mkdirSync(childDir, { recursive: true });
-    writeFileSync(
-      join(childDir, "status.yaml"),
-      YAML.stringify({
-        task_id: "child-task",
-        title: "Child",
-        created: "2026-03-29T00:00:00.000Z",
-        updated: "2026-03-29T00:00:00.000Z",
-        status: "pending",
-        assigned_to: "agent-1",
-        started_at: null,
-        completed_at: null,
-        progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
-        children: [],
-        outputs: [],
-        steps: [],
-        timing: { elapsed_minutes: null },
-        errors: [],
-        alerts: [],
-        blocked_by: [],
-        verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
-        revisions: [],
-      }),
-      "utf-8",
-    );
-
+  it("should include outputs list in result", async () => {
     const taskDir = createTaskWithStatus("running", {
-      children: [childDir],
+      outputs: ["/path/to/output.txt"],
     });
     const result = await executeTaskResume("t-14", { task_dir: taskDir });
     const data = parseResult(result.content[0].text);
 
-    expect(data.children).toBeDefined();
-    expect(data.children).toHaveLength(1);
-    expect(data.children[0]).toContain("child-task");
+    expect(data.outputs).toBeDefined();
+    expect(data.outputs).toHaveLength(1);
+    expect(data.outputs[0]).toBe("/path/to/output.txt");
   });
 
   it("should prioritize errors over blocks when both exist", async () => {

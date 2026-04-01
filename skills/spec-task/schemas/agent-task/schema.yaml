@@ -49,61 +49,46 @@ artifacts:
 
   - id: plan
     generates: "plan.md"
-    description: 执行计划（策略 + 工具 + 依赖 + 时间）
+    description: 执行计划（策略 + 关键决策 + 工具 + 依赖 + 详细步骤）
     template: "plan.md"
     instruction: |
       创建执行计划。说明如何完成任务：
       - Strategy：用什么策略？
+      - Key Decisions：列出关键技术决策，每个包含选择→替代方案→理由（基于代码库探索结果）
       - Tools Required：需要调用哪些工具/API/数据源
       - Dependencies：依赖其他什么任务或外部条件
+      - Steps Overview：详细步骤分解。每步必须包含：操作动词 + 目标文件路径 + 函数/接口名 + 行为描述 + 验证方式
       - Estimated Time：预估总执行时间
+
+      Steps Overview 质量要求：
+      - 每步引用具体的文件路径和函数名（不是笼统描述）
+      - 包含关键实现行为（如"扫描 runs/ 子目录获取下一个递增编号"）
+      - 以验证方式结尾（如"运行 npm test 验证"）
 
       注意：status.yaml 由 task_create 工具自动创建，无需手动维护。
 
       rules 检查：
       - 必须列出所需的工具或 API
+      - 必须包含至少 1 条 Key Decision（选择→替代方案→理由）
+      - Steps Overview 中每步必须引用目标文件路径
 
     requires: [brief]
 
-  - id: checklist
-    generates: "checklist.md"
-    description: 执行清单（可勾选的原子步骤）
-    template: "checklist.md"
-    instruction: |
-      将 plan.md 拆解为可执行的原子步骤，使用 Markdown checkbox 格式。
-
-      要求：
-      - 每个步骤有明确的描述和可验证的产出物
-      - 单个步骤不超过 15 分钟执行时间
-      - 步骤按执行顺序排列，支持分组
-      - 使用 `- [ ]` 格式，执行时勾选为 `- [x]`
-
-      注意：progress 信息由脚本自动计算，无需手动更新 status.yaml 中的进度字段。
-
-      rules 检查：
-      - 每个步骤必须有可验证的产出物
-      - 单个步骤不超过 15 分钟执行时间
-
-    requires: [spec, plan]
-
 apply:
-  requires: [checklist]
-  tracks: "checklist.md"
   instruction: |
-    按执行清单逐步执行。使用工具驱动状态管理：
+    按执行计划逐步执行。使用工具驱动状态管理：
 
-    1. 从第一个未勾选的步骤开始
-    2. **每完成一个步骤，立即调用 `checklist_write` 工具写回更新后的完整 checklist**（先 `checklist_read` 读取 → 修改勾选 → `checklist_write` 覆盖）
-       - `checklist_write` 全量覆盖 checklist.md 并自动重算进度、更新 status.yaml
-       - 绝对禁止手动编辑 checklist.md 文件来打勾，必须使用 checklist_write 工具
+    1. 从 steps 中第一个未完成的步骤开始
+    2. **每完成一个步骤，立即调用 `steps_update` 工具更新步骤状态**（先 `steps_read` 读取当前步骤 → 修改完成状态 → `steps_update` 写回）
+       - `steps_update` 全量覆盖 steps 并自动重算进度、更新 status.yaml
+       - 绝对禁止手动编辑 status.yaml 文件来修改步骤状态，必须使用 steps_update 工具
     3. 使用 task_transition 工具切换任务阶段（如 pending → assigned）
     4. 使用 task_log 工具记录执行日志（产出物路径、耗时、备注）
     5. 产出物直接写入任务目录下（如 analysis-report.md、data.json 等）
     6. 如需暂停后恢复，使用 task_resume 工具恢复任务上下文
-    7. 遇到问题按 failure_policy 处理（参见 SKILL.md 错误处理章节）
+    7. 遇到问题按 failure_policy 处理
 
 verify:
-  requires: [checklist]
   instruction: |
     对照 brief.md 的 Success Criteria 逐条验收。使用 task_verify 工具驱动验证流程：
 

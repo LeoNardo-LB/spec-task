@@ -1,9 +1,8 @@
 import { readdir, stat, readFile } from "fs/promises";
 import { join } from "path";
 import YAML from "yaml";
+import { TERMINAL_STATUSES } from "./types.js";
 import type { DetectorResult, SkeletonTask, ArtifactName } from "./types.js";
-
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 async function safeStat(path: string): Promise<import("fs").Stats | null> {
   try {
@@ -19,12 +18,12 @@ export class Detector {
    *
    * L1 none:      spec-task/ 目录不存在
    * L2 empty:     目录存在但无任务子目录
-   * L3 skeleton:  有 status.yaml 但缺 brief/spec/plan/checklist
+    * L3 skeleton:  有 status.yaml 但缺 brief/spec/plan
    * L4 in_progress: 有非终态任务且文档完整
    * L5 all_done:  所有任务都是终态
    */
   async detect(workspaceDir: string, requiredArtifacts?: readonly ArtifactName[]): Promise<DetectorResult> {
-    const required: readonly ArtifactName[] = requiredArtifacts ?? ["checklist"];
+    const required: readonly ArtifactName[] = requiredArtifacts ?? ["brief"];
     const specTaskDir = join(workspaceDir, "spec-task");
 
     // L1: 目录不存在
@@ -57,24 +56,50 @@ export class Detector {
 
     for (const taskName of taskDirs) {
       const taskDir = join(specTaskDir, taskName);
-      const statusFile = join(taskDir, "status.yaml");
 
-      const statusStat = await safeStat(statusFile);
-      if (!statusStat) continue;
+      // Check for runs/ subdirectory
+      const runsDir = join(taskDir, "runs");
+      const runsStat = await safeStat(runsDir);
+      if (!runsStat || !runsStat.isDirectory()) {
+        // No runs/ directory — check if it's a legacy task with direct status.yaml
+        const legacyStatusFile = join(taskDir, "status.yaml");
+        const legacyStat = await safeStat(legacyStatusFile);
+        if (!legacyStat) continue;
 
-      let statusData: any;
-      try {
-        const content = await readFile(statusFile, "utf-8");
-        statusData = YAML.parse(content);
-      } catch {
-        continue; // YAML 解析失败 → 静默跳过
+        let statusData: any;
+        try {
+          const content = await readFile(legacyStatusFile, "utf-8");
+          statusData = YAML.parse(content);
+        } catch { continue; }
+
+        if (TERMINAL_STATUSES.has(statusData.status)) continue;
+
+        // Check skeleton for legacy tasks
+        const missing: ArtifactName[] = [];
+        for (const artifact of required) {
+          const artifactFile = join(taskDir, `${artifact}.md`);
+          const exists = await safeStat(artifactFile);
+          if (!exists) missing.push(artifact);
+        }
+
+        if (missing.length > 0) {
+          skeletonTasks.push({ name: taskName, dir: taskDir, missing, status: statusData.status ?? null });
+        } else {
+          incompleteTasks.push({ name: taskName, status: statusData.status });
+        }
+        continue;
       }
 
-      // 跳过终态任务
-      if (TERMINAL_STATUSES.has(statusData.status)) continue;
+      // Scan runs/ subdirectory for active runs
+      let runEntries: import("fs").Dirent[];
+      try {
+        runEntries = await readdir(runsDir, { withFileTypes: true });
+      } catch { continue; }
 
-      // 检查骨架：status.yaml 存在但缺少关键文档
+      let hasActiveRun = false;
+      let isSkeleton = false;
       const missing: ArtifactName[] = [];
+
       for (const artifact of required) {
         const artifactFile = join(taskDir, `${artifact}.md`);
         const exists = await safeStat(artifactFile);
@@ -82,14 +107,33 @@ export class Detector {
       }
 
       if (missing.length > 0) {
-        skeletonTasks.push({
-          name: taskName,
-          dir: taskDir,
-          missing,
-          status: statusData.status ?? null,
-        });
-      } else {
-        incompleteTasks.push({ name: taskName, status: statusData.status });
+        isSkeleton = true;
+      }
+
+      for (const runEntry of runEntries) {
+        if (!runEntry.isDirectory()) continue;
+        if (!/^\d{3}$/.test(runEntry.name)) continue;
+
+        const statusFile = join(runsDir, runEntry.name, "status.yaml");
+        const statusStat = await safeStat(statusFile);
+        if (!statusStat) continue;
+
+        let statusData: any;
+        try {
+          const content = await readFile(statusFile, "utf-8");
+          statusData = YAML.parse(content);
+        } catch { continue; }
+
+        if (TERMINAL_STATUSES.has(statusData.status)) continue;
+
+        hasActiveRun = true;
+
+        if (isSkeleton) {
+          skeletonTasks.push({ name: taskName, dir: taskDir, missing, status: statusData.status ?? null });
+        } else {
+          incompleteTasks.push({ name: taskName, status: statusData.status });
+        }
+        break; // Only need one active run per task
       }
     }
 

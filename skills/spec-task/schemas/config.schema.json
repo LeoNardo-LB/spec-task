@@ -1,0 +1,152 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/spec-task/config.schema.json",
+  "title": "Spec-Task Config",
+  "description": "spec-task 项目级配置（config.yaml）的 JSON Schema。存放于 <workspace>/spec-task/config.yaml，由 config_merge 工具生成/合并。",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "context": {
+      "type": "string",
+      "description": "项目级背景上下文，注入到 LLM 的 system prompt 中。通常从 AGENTS.md / SOUL.md 等身份文件自动提取首段（≤200字符）。",
+      "examples": [
+        "这是你的工作目录，所有文件操作、任务记录都在这里完成。"
+      ]
+    },
+    "tracking": {
+      "type": "object",
+      "description": "构件追踪级别配置。控制 hook 检测 skeleton（缺少构件）时的行为。",
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "description": "追踪级别。low=不追踪构件；medium=要求 brief；high=要求 brief + plan。",
+          "default": "low"
+        },
+        "required_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["brief", "spec", "plan"]
+          },
+          "description": "自定义必需构件列表（覆盖 level 的默认值）。",
+          "default": []
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "description": "运行时行为配置。",
+      "additionalProperties": false,
+      "properties": {
+        "allow_agent_self_delegation": {
+          "type": "boolean",
+          "description": "允许 agent 自行委派子 agent 执行任务。",
+          "default": true
+        },
+        "task_timeout": {
+          "type": "integer",
+          "description": "单个任务的超时时间（分钟）。",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 1440
+        }
+      }
+    },
+    "failure_policy": {
+      "type": "object",
+      "description": "任务失败时的处理策略。",
+      "additionalProperties": false,
+      "properties": {
+        "soft_block": {
+          "type": "object",
+          "description": "软阻塞策略（步骤级别重试）。",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": ["retry", "escalate"],
+              "default": "retry"
+            },
+            "max_retries": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
+        },
+        "hard_block": {
+          "type": "object",
+          "description": "硬阻塞策略（任务级别阻断）。",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": ["adapt", "fail"],
+              "default": "fail"
+            },
+            "adapt_modifies": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "adapt 模式下允许修改的字段列表。",
+              "default": []
+            },
+            "on_adapt_failed": {
+              "type": "string",
+              "enum": ["fail", "escalate"],
+              "default": "fail"
+            }
+          }
+        },
+        "verify_failed": {
+          "type": "object",
+          "description": "验收失败策略。",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": ["retry", "escalate", "adaptive"],
+              "default": "retry"
+            },
+            "max_retries": {
+              "type": "integer",
+              "default": 3,
+              "minimum": 1,
+              "maximum": 10
+            }
+          }
+        },
+        "on_exhausted": {
+          "type": "string",
+          "enum": ["escalate", "fail"],
+          "description": "所有重试用尽后的最终处理。",
+          "default": "escalate"
+        }
+      }
+    },
+    "archive": {
+      "type": "object",
+      "description": "归档配置。",
+      "additionalProperties": false,
+      "properties": {
+        "auto_archive": {
+          "type": "boolean",
+          "description": "任务完成后是否自动归档。",
+          "default": false
+        },
+        "record_history": {
+          "type": "boolean",
+          "description": "归档时是否生成 task-history 记录。",
+          "default": true
+        },
+        "generate_lessons": {
+          "type": "boolean",
+          "description": "归档时是否从 errors/outputs 提取经验教训。",
+          "default": true
+        }
+      }
+    }
+  }
+}

@@ -25,7 +25,8 @@ declare module "openclaw/plugin-sdk" {
       error: (...args: unknown[]) => void;
       debug: (...args: unknown[]) => void;
     };
-    on(event: string, handler: (context: Record<string, unknown>) => Promise<Record<string, unknown>> | Record<string, unknown>): void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    on(event: string, handler: (...args: any[]) => any): void;
     registerTool(tool: {
       name: string;
       description: string;

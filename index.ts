@@ -1,6 +1,10 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { readFileSync } from "fs";
 import { Detector } from "./src/detector.js";
 import { createPromptBuildHandler } from "./src/hooks/before-prompt-build.js";
+import { validateStepsForCompletion, checkTransitionBlocked, checkVerificationBlocked, checkVerifyFinalizeBlocked } from "./src/core/steps-utils.js";
+import { join } from "path";
+import YAML from "yaml";
 
 // 工具导入
 import {
@@ -36,13 +40,17 @@ import {
   executeConfigMerge,
 } from "./src/tools/config-merge.js";
 import {
-  ChecklistReadParamsSchema,
-  executeChecklistRead,
-} from "./src/tools/checklist-read.js";
+  StepsUpdateParamsSchema,
+  executeStepsUpdate,
+} from "./src/tools/steps-update.js";
 import {
-  ChecklistWriteParamsSchema,
-  executeChecklistWrite,
-} from "./src/tools/checklist-write.js";
+  StepsReadParamsSchema,
+  executeStepsRead,
+} from "./src/tools/steps-read.js";
+import {
+  TaskInstructionsParamsSchema,
+  executeTaskInstructions,
+} from "./src/tools/task-instructions.js";
 
 export default definePluginEntry({
   id: "spec-task",
@@ -54,7 +62,6 @@ export default definePluginEntry({
     const detector = new Detector();
     const pluginConfig = (api.pluginConfig ?? api.config ?? {}) as {
       enforceOnSubAgents?: boolean;
-      interventionLevel?: "low" | "medium" | "high" | "always";
     };
 
     // 闭包 Map：存储 agentId/sessionKey → workspaceDir 映射
@@ -69,24 +76,42 @@ export default definePluginEntry({
       createPromptBuildHandler(api.logger, detector, pluginConfig, workspaceDirMap)
     );
 
-    // before_tool_call: 自动注入 project_root 为 agent 的 workspace 目录
+    // before_tool_call: Steps 完成性拦截 + Verification 拦截 + 自动注入 project_root
     // PluginHookToolContext 没有 workspaceDir，需要从 workspaceDirMap 中查找。
     // 查找优先级：sessionKey > agentId。
-    const SPEC_TASK_TOOLS = new Set(["task_create", "config_merge", "task_archive", "task_recall"]);
+    const SPEC_TASK_TOOLS = new Set(["task_create", "config_merge", "task_archive", "task_recall", "task_instructions"]);
     api.on("before_tool_call", async (event, ctx) => {
-      // ── 拦截对 checklist.md 的直接写入，强制使用 checklist_write ──
-      if (event.toolName === "write" || event.toolName === "edit") {
-        const filePath = (event.params?.path ?? event.params?.file_path ?? "") as string;
-        if (filePath.endsWith("checklist.md") || filePath.includes("/checklist.md")) {
-          api.logger.info(`[spec-task] before_tool_call: BLOCKED ${event.toolName} to checklist.md — use checklist_write instead`);
-          return {
-            block: true,
-            params: event.params,
-          };
+      // ── Steps 完成性拦截：task_transition(completed) ──
+      if (event.toolName === "task_transition" && event.params?.status === "completed") {
+        const taskDir = event.params?.task_dir;
+        if (taskDir) {
+          const blocked = checkTransitionBlocked(taskDir);
+          if (blocked) {
+            api.logger.warn(`[spec-task] before_tool_call: blocked task_transition(completed) — ${blocked.blockReason}`);
+            return { block: true, blockReason: blocked.blockReason };
+          }
+          // ── Verification 前置条件拦截 ──
+          const verifyBlocked = checkVerificationBlocked(taskDir);
+          if (verifyBlocked) {
+            api.logger.warn(`[spec-task] before_tool_call: blocked task_transition(completed) — verification not passed — ${verifyBlocked.blockReason}`);
+            return { block: true, blockReason: verifyBlocked.blockReason };
+          }
         }
       }
 
-      // ── 仅保留 project_root 注入逻辑 ──
+      // ── Verification finalize 空标准拦截 ──
+      if (event.toolName === "task_verify" && event.params?.action?.action === "finalize") {
+        const taskDir = event.params?.task_dir;
+        if (taskDir) {
+          const verifyFinalizeBlocked = checkVerifyFinalizeBlocked(taskDir);
+          if (verifyFinalizeBlocked) {
+            api.logger.warn(`[spec-task] before_tool_call: blocked task_verify(finalize) — ${verifyFinalizeBlocked.blockReason}`);
+            return { block: true, blockReason: verifyFinalizeBlocked.blockReason };
+          }
+        }
+      }
+
+      // ── project_root 注入逻辑 ──
       if (!SPEC_TASK_TOOLS.has(event.toolName)) return;
       const params = event.params ?? {};
       if (params.project_root) {
@@ -105,7 +130,7 @@ export default definePluginEntry({
       return { params: { ...params, project_root: workspaceDir } };
     });
 
-    // ── 工具注册（9 个）──────────────────────────────────────
+    // ── 工具注册（11 个）─────────────────────────────────────
     api.registerTool({
       name: "config_merge",
       description:
@@ -134,7 +159,7 @@ export default definePluginEntry({
         "\n- task_name (必需): kebab-case 任务名称" +
         "\n- brief (推荐): 任务简报，定义目标和成功标准" +
         "\n- plan (推荐): 执行计划，说明步骤分解和策略" +
-        "\n- checklist (推荐): 进度追踪清单，后续用 checklist_write 更新进度" +
+        "\n- checklist (推荐): 进度追踪清单，后续用 steps_update 更新进度" +
         "\n\n**brief 格式参考：**" +
         "\n## 目标" +
         "\n一句话概括核心目标。" +
@@ -168,7 +193,7 @@ export default definePluginEntry({
     api.registerTool({
       name: "task_transition",
       description:
-        "转换任务状态。task_dir 为必填参数（任务目录路径）。支持 8 种状态的 14 条合法转换。自动记录 revision、更新进度和时间戳。",
+        "转换任务状态。task_dir 为必填参数（任务目录路径）。支持 8 种状态的 14 条合法转换。自动记录 revision、更新进度和时间戳。\n\n⚠️ 当目标状态为 completed 时，必须先调用 task_verify(finalize) 通过验收。直接调用 task_transition(completed) 在未验收时会被拒绝并返回下一步操作指引。",
       parameters: TaskTransitionParamsSchema,
       async execute(_id, params) {
         return executeTaskTransition(_id, params as any);
@@ -188,7 +213,22 @@ export default definePluginEntry({
     api.registerTool({
       name: "task_verify",
       description:
-        "管理任务验收。task_dir 为必填参数（任务目录路径）。支持 3 种操作：add-criterion（添加验收标准）、finalize（汇总并最终确认）、get（查看当前验证状态）。",
+        "管理任务验收。task_dir 为必填参数（任务目录路径）。\n\n" +
+        "**推荐流程**：\n" +
+        "1. `task_verify(action: { action: \"get\" })` — 查看当前验收状态\n" +
+        "2. `task_verify(action: { action: \"add-criterion\", criterion: \"...\", result: \"passed\"|\"failed\" })` — 逐条添加验收标准\n" +
+        "3. `task_verify(action: { action: \"finalize\", verified_by: \"...\" })` — 汇总确认，全部通过时自动完成任务\n\n" +
+        "**关键行为**：\n" +
+        "- finalize 时至少需要一条验收标准，否则会被拒绝\n" +
+        "- 所有标准 passed → verification.status = \"passed\"，如果 steps 也全部完成则自动 task_transition(completed)\n" +
+        "- 存在 failed 标准 → verification.status = \"failed\"，需要修正后重新 finalize\n" +
+        "- add-criterion/get 后会返回 `suggested_criteria`（基于 steps 的未覆盖建议），帮助你补全验收标准\n\n" +
+        "**参数说明**：\n" +
+        "- criterion: 验收标准描述（建议引用步骤标题，如\"验证步骤 1.1: 实现用户登录\"）\n" +
+        "- result: \"passed\" 或 \"failed\"\n" +
+        "- evidence: 可选，验收证据（如测试输出、截图路径）\n" +
+        "- reason: 可选，失败原因或通过说明\n" +
+        "- verified_by: finalize 时可选，验证人标识",
       parameters: TaskVerifyParamsSchema,
       async execute(_id, params) {
         return executeTaskVerify(_id, params as any);
@@ -216,33 +256,43 @@ export default definePluginEntry({
     });
 
     api.registerTool({
-      name: "checklist_read",
+      name: "task_instructions",
       description:
-        "全量读取指定任务的 checklist.md 内容和进度统计（只读，不修改任何文件）。返回完整 markdown 内容、进度百分比和未完成步骤。",
-      parameters: ChecklistReadParamsSchema,
+        "查询 spec-task 构件的创建指导。返回指定构件的 instruction（创建说明）、template（模板）、context（项目上下文）、rules（规则约束）、dependencies（依赖构件内容）。用于获取下一个需要创建的构件的详细指导信息。",
+      parameters: TaskInstructionsParamsSchema,
       async execute(_id, params) {
-        return executeChecklistRead(_id, params as any);
+        return executeTaskInstructions(_id, params as any);
       },
     });
 
     api.registerTool({
-      name: "checklist_write",
+      name: "steps_read",
       description:
-        `全量覆盖指定任务的 checklist.md 文件。传入完整 markdown 内容，覆盖写入 checklist.md 并自动更新 status.yaml 进度。
+        "读取指定任务的步骤数据和进度统计（只读，不修改任何文件）。从 status.yaml.steps 读取结构化步骤列表，返回每个步骤的 id、summary、status、completed_at 等信息，以及总体进度百分比。",
+      parameters: StepsReadParamsSchema,
+      async execute(_id, params) {
+        return executeStepsRead(_id, params as any);
+      },
+    });
 
-**推荐工作流**：先 checklist_read 读取当前状态 → 完成步骤 → checklist_write 写回更新后的完整内容。
+    api.registerTool({
+      name: "steps_update",
+      description:
+        `全量更新指定任务的步骤数据。传入结构化 Step[] 数组，替换 status.yaml 中的 steps 字段。
+
+**推荐工作流**：先 steps_read 读取当前步骤 → 完成步骤 → steps_update 写回更新后的完整步骤数组。
 
 **参数说明**：
-- task_dir（必填）：任务目录的绝对路径（task_create 返回的 task_dir）
-- content（必填）：完整的 checklist markdown 内容。全量覆盖，传入什么就存什么。
+- task_dir（必填）：任务 run 目录的绝对路径（task_create 返回的 task_dir）
+- steps（必填）：完整的步骤数组，全量替换。每个步骤包含 id、summary（title/content/approach/sources）、status（pending/completed/skipped）、tags 等字段。
 
 **典型用法**：
-✅ checklist_read(task_dir) → 修改 content 中的 [ ] 为 [x] → checklist_write(task_dir, content)
+✅ steps_read(task_dir) → 修改步骤的 status 为 "completed" → steps_update(task_dir, steps)
 ✅ 重新规划任务：直接传入新的完整步骤列表
-✅ 批量打勾：传入的内容中已勾选的步骤会被正确计算进度`,
-      parameters: ChecklistWriteParamsSchema,
+✅ 批量更新：传入已更新的步骤数组，自动计算进度`,
+      parameters: StepsUpdateParamsSchema,
       async execute(_id, params) {
-        return executeChecklistWrite(_id, params as any);
+        return executeStepsUpdate(_id, params as any);
       },
     });
   },
