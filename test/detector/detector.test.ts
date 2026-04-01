@@ -42,13 +42,13 @@ describe("Detector", () => {
   });
 
   // L3: skeleton — missing artifacts
-  // 注意：detector.detect() 默认 requiredArtifacts=["checklist"]，
+  // 注意：detector.detect() 默认 requiredArtifacts=["brief"]，
   // 此测试显式传入完整构件列表以验证多构件缺失检测能力。
   it("should return level 'skeleton' when task has status.yaml but missing brief.md", async () => {
     const taskDir = join(tmpDir, "spec-task", "task-1");
     writeStatus(taskDir, { task_id: "task-1", status: "pending" });
 
-    const result = await detector.detect(tmpDir, ["brief", "spec", "plan", "checklist"]);
+    const result = await detector.detect(tmpDir, ["brief", "spec", "plan"]);
     expect(result.level).toBe("skeleton");
     expect(result.skeleton_tasks).toHaveLength(1);
     expect(result.skeleton_tasks[0].name).toBe("task-1");
@@ -60,10 +60,10 @@ describe("Detector", () => {
     writeStatus(taskDir, { task_id: "task-1", status: "running" });
     writeFileSync(join(taskDir, "brief.md"), "# Brief", "utf-8");
 
-    const result = await detector.detect(tmpDir, ["brief", "spec", "plan", "checklist"]);
+    const result = await detector.detect(tmpDir, ["brief", "spec", "plan"]);
     expect(result.level).toBe("skeleton");
     expect(result.skeleton_tasks[0].missing).toEqual(
-      expect.arrayContaining(["spec", "plan", "checklist"])
+      expect.arrayContaining(["spec", "plan"])
     );
     expect(result.skeleton_tasks[0].missing).not.toContain("brief");
   });
@@ -72,11 +72,11 @@ describe("Detector", () => {
   it("should return level 'in_progress' when task has all artifacts and non-terminal status", async () => {
     const taskDir = join(tmpDir, "spec-task", "task-1");
     writeStatus(taskDir, { task_id: "task-1", status: "running" });
-    for (const artifact of ["brief", "spec", "plan", "checklist"]) {
+    for (const artifact of ["brief", "spec", "plan"]) {
       writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
 
-    const result = await detector.detect(tmpDir);
+    const result = await detector.detect(tmpDir, ["brief", "spec", "plan"]);
     expect(result.level).toBe("in_progress");
     expect(result.incomplete_tasks).toHaveLength(1);
     expect(result.incomplete_tasks[0].name).toBe("task-1");
@@ -87,11 +87,11 @@ describe("Detector", () => {
   it("should return level 'all_done' when all tasks are in terminal status", async () => {
     const taskDir = join(tmpDir, "spec-task", "task-1");
     writeStatus(taskDir, { task_id: "task-1", status: "completed" });
-    for (const artifact of ["brief", "spec", "plan", "checklist"]) {
+    for (const artifact of ["brief", "spec", "plan"]) {
       writeFileSync(join(taskDir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
 
-    const result = await detector.detect(tmpDir);
+    const result = await detector.detect(tmpDir, ["brief", "spec", "plan"]);
     expect(result.level).toBe("all_done");
     expect(result.incomplete_tasks).toHaveLength(0);
   });
@@ -115,11 +115,11 @@ describe("Detector", () => {
 
     const task2Dir = join(tmpDir, "spec-task", "task-2");
     writeStatus(task2Dir, { task_id: "task-2", status: "running" });
-    for (const artifact of ["brief", "spec", "plan", "checklist"]) {
+    for (const artifact of ["brief", "spec", "plan"]) {
       writeFileSync(join(task2Dir, `${artifact}.md`), `# ${artifact}`, "utf-8");
     }
 
-    const result = await detector.detect(tmpDir);
+    const result = await detector.detect(tmpDir, ["brief"]);
     expect(result.level).toBe("skeleton");
     expect(result.skeleton_tasks).toHaveLength(1);
   });

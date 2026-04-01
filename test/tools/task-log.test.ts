@@ -34,15 +34,13 @@ describe("executeTaskLog", () => {
       updated: "2026-03-29T00:00:00.000Z",
       status,
       assigned_to: "agent",
+      run_id: "001",
       started_at: null,
       completed_at: null,
       progress: { total: 3, completed: 1, skipped: 0, current_step: "2.1", percentage: 33 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: {
         status: "pending",
@@ -153,47 +151,9 @@ describe("executeTaskLog", () => {
   });
 
   // ────────────────────────────────────────────────────────────
-  // 4. alert record
+  // 4. add-block
   // ────────────────────────────────────────────────────────────
-  it("4. should log alert record", async () => {
-    const taskDir = createTask("running");
-    const result = await executeTaskLog("l4", {
-      task_dir: taskDir,
-      action: { action: "alert", type: "warning", message: "Low disk space" },
-    });
-    const data = parseResult(result);
-    expect(data.success).toBe(true);
-
-    const status = readStatus(taskDir);
-    expect(status.alerts).toHaveLength(1);
-    expect(status.alerts[0].type).toBe("warning");
-    expect(status.alerts[0].message).toBe("Low disk space");
-  });
-
-  // ────────────────────────────────────────────────────────────
-  // 5. alert multiple
-  // ────────────────────────────────────────────────────────────
-  it("5. should log multiple alerts", async () => {
-    const taskDir = createTask("running");
-    await executeTaskLog("l5a", {
-      task_dir: taskDir,
-      action: { action: "alert", type: "warning", message: "Alert 1" },
-    });
-    await executeTaskLog("l5b", {
-      task_dir: taskDir,
-      action: { action: "alert", type: "error", message: "Alert 2" },
-    });
-
-    const status = readStatus(taskDir);
-    expect(status.alerts).toHaveLength(2);
-    expect(status.alerts[0].type).toBe("warning");
-    expect(status.alerts[1].type).toBe("error");
-  });
-
-  // ────────────────────────────────────────────────────────────
-  // 6. add-block
-  // ────────────────────────────────────────────────────────────
-  it("6. should add block record", async () => {
+  it("4. should add block record", async () => {
     const taskDir = createTask("running");
     const result = await executeTaskLog("l6", {
       task_dir: taskDir,
@@ -404,16 +364,11 @@ describe("executeTaskLog", () => {
     });
     await executeTaskLog("l16b", {
       task_dir: taskDir,
-      action: { action: "alert", type: "info", message: "Info" },
-    });
-    await executeTaskLog("l16c", {
-      task_dir: taskDir,
       action: { action: "output", path: "/out.md" },
     });
 
     const status = readStatus(taskDir);
     expect(status.errors).toHaveLength(1);
-    expect(status.alerts).toHaveLength(1);
     expect(status.outputs).toHaveLength(1);
   });
 
@@ -505,15 +460,13 @@ describe("executeTaskLog - concurrent safety", () => {
       updated: new Date().toISOString(),
       status,
       assigned_to: "agent",
+      run_id: "001",
       started_at: null,
       completed_at: null,
       progress: { total: 3, completed: 1, skipped: 0, current_step: "2.1", percentage: 33 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: {
         status: "pending",

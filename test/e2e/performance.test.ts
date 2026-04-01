@@ -31,7 +31,6 @@ describe("E2E: Performance", () => {
         id: i + 1, type: "status_change",
         timestamp: new Date(Date.now() + i).toISOString(),
         trigger: "perf-agent", summary: `Progress ${i + 1}/${N}`,
-        block_type: null, block_reason: null,
       });
     }
 
@@ -68,11 +67,11 @@ describe("E2E: Performance", () => {
 
     // Mark perf-revisions (from first test) as completed so it doesn't pollute counts
     const perfRevisionsDir = join(specTaskDir, "perf-revisions");
-    const revContent = await readFile(join(perfRevisionsDir, "status.yaml"), "utf-8");
+    const revContent = await readFile(join(perfRevisionsDir, "runs", "001", "status.yaml"), "utf-8");
     const revData = YAML.parse(revContent) as TaskStatusData;
     revData.status = "completed";
     revData.completed_at = new Date().toISOString();
-    await writeFile(join(perfRevisionsDir, "status.yaml"), YAML.stringify(revData), "utf-8");
+    await writeFile(join(perfRevisionsDir, "runs", "001", "status.yaml"), YAML.stringify(revData), "utf-8");
 
     const detector = new Detector();
 
@@ -105,10 +104,10 @@ describe("E2E: Performance", () => {
     // All completed → all_done
     for (let i = 0; i < TASK_COUNT; i++) {
       const dir = join(specTaskDir, `perf-${String(i + 1).padStart(3, "0")}`);
-      const c = await readFile(join(dir, "status.yaml"), "utf-8");
+      const c = await readFile(join(dir, "runs", "001", "status.yaml"), "utf-8");
       const d = YAML.parse(c) as TaskStatusData;
       d.status = "completed"; d.completed_at = new Date().toISOString();
-      await writeFile(join(dir, "status.yaml"), YAML.stringify(d), "utf-8");
+      await writeFile(join(dir, "runs", "001", "status.yaml"), YAML.stringify(d), "utf-8");
     }
 
     const t2 = performance.now();

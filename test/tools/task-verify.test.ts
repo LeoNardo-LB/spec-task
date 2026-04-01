@@ -36,13 +36,11 @@ describe("executeTaskVerify", () => {
       assigned_to: "agent",
       started_at: status === "running" ? "2026-03-29T08:00:00.000Z" : null,
       completed_at: null,
+      run_id: "001",
       progress: { total: 3, completed: 1, skipped: 0, current_step: "2.1", percentage: 33 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: {
         status: "pending",
@@ -267,7 +265,12 @@ describe("executeTaskVerify", () => {
   // 10. finalize all passed + running → auto completed
   // ────────────────────────────────────────────────────────────
   it("10. should auto-complete when all passed and status is running", async () => {
-    const taskDir = createTask("running");
+    const taskDir = createTask("running", {
+      steps: [
+        { id: "1.1", summary: { title: "Step 1", content: "", approach: "", sources: [] }, status: "completed", completed_at: "2026-03-29T10:00:00.000Z", tags: [] },
+        { id: "1.2", summary: { title: "Step 2", content: "", approach: "", sources: [] }, status: "completed", completed_at: "2026-03-29T10:00:00.000Z", tags: [] },
+      ],
+    });
     await executeTaskVerify("v10a", {
       task_dir: taskDir,
       action: { action: "add-criterion", criterion: "Test 1", result: "passed" },
@@ -330,7 +333,11 @@ describe("executeTaskVerify", () => {
   // 13. finalize auto-complete creates revision
   // ────────────────────────────────────────────────────────────
   it("13. should create revision on auto-complete", async () => {
-    const taskDir = createTask("running");
+    const taskDir = createTask("running", {
+      steps: [
+        { id: "1.1", summary: { title: "Step 1", content: "", approach: "", sources: [] }, status: "completed", completed_at: "2026-03-29T10:00:00.000Z", tags: [] },
+      ],
+    });
     await executeTaskVerify("v13a", {
       task_dir: taskDir,
       action: { action: "add-criterion", criterion: "Test", result: "passed" },
@@ -390,7 +397,11 @@ describe("executeTaskVerify", () => {
   // 17. finalize idempotent on terminal state
   // ────────────────────────────────────────────────────────────
   it("17. should allow repeated finalize on already completed task without error (idempotent)", async () => {
-    const taskDir = createTask("running");
+    const taskDir = createTask("running", {
+      steps: [
+        { id: "1.1", summary: { title: "Step 1", content: "", approach: "", sources: [] }, status: "completed", completed_at: "2026-03-29T10:00:00.000Z", tags: [] },
+      ],
+    });
     // Add a passed criterion and finalize (auto-completes)
     await executeTaskVerify("v17a", {
       task_dir: taskDir,
@@ -452,13 +463,11 @@ describe("executeTaskVerify - concurrent safety", () => {
       assigned_to: "agent",
       started_at: status === "running" ? new Date().toISOString() : null,
       completed_at: null,
+      run_id: "001",
       progress: { total: 3, completed: 1, skipped: 0, current_step: "2.1", percentage: 33 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: {
         status: "pending",

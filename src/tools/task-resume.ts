@@ -30,7 +30,7 @@ function nextAction(d: TaskStatusData): string {
       }
       return d.progress.current_step
         ? `继续执行: 步骤 ${d.progress.current_step} (${d.progress.percentage}%)`
-        : "继续执行: 检查 checklist.md";
+        : "继续执行: 使用 steps_read 查看当前步骤";
     case "completed":
       return "已完成: 考虑使用 task_archive 归档";
     case "failed":
@@ -76,9 +76,7 @@ export async function executeTaskResume(
     },
     progress: data.progress,
     outputs: data.outputs,
-    children: data.children,
     errors: data.errors,
-    alerts: data.alerts,
     blocked_by: data.blocked_by,
     revisions: data.revisions,
   });

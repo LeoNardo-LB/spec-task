@@ -1,9 +1,8 @@
 {
   "id": "spec-task-system",
   "name": "Spec-Task System",
-  "version": "0.2.0",
-  "description": "Structured task management with lifecycle enforcement. Provides 10 tools (config_merge, task_recall, task_create, task_transition, task_log, task_verify, task_resume, task_archive, checklist_read, checklist_write) and hooks (before_prompt_build, before_tool_call) for sub-agent compliance and checklist tracking.",
-  "skills": ["skills/spec-task-system"],
+  "version": "0.3.0",
+  "description": "Structured task management with lifecycle enforcement. Provides 11 tools (config_merge, task_recall, task_create, task_transition, task_log, task_verify, task_resume, task_archive, task_instructions, steps_read, steps_update) and hooks (before_prompt_build, before_tool_call) for sub-agent compliance and step tracking.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -12,12 +11,6 @@
         "type": "boolean",
         "description": "Whether to inject spec-task reminders for sub-agents (default: true)",
         "default": true
-      },
-      "interventionLevel": {
-        "type": "string",
-        "enum": ["low", "medium", "high", "always"],
-        "description": "Controls when spec-task intervenes in agent workflow. Based on task decomposition leaf-node count. low=≥20, medium=≥10, high=≥3, always=unconditional. Default: high.",
-        "default": "high"
       }
     }
   }

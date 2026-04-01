@@ -20,9 +20,14 @@ describe("executeTaskArchive", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  /**
+   * Create a task with runs/001/status.yaml layout.
+   * Returns the run directory (task-root/runs/001/).
+   */
   function createTask(statusData: Partial<TaskStatusData> = {}): string {
-    const taskDir = join(tmpDir, "test-task");
-    mkdirSync(taskDir, { recursive: true });
+    const taskRoot = join(tmpDir, "test-task");
+    const runDir = join(taskRoot, "runs", "001");
+    mkdirSync(runDir, { recursive: true });
 
     const data: TaskStatusData = {
       task_id: "test-task",
@@ -33,21 +38,19 @@ describe("executeTaskArchive", () => {
       assigned_to: "agent-1",
       started_at: "2026-03-29T01:00:00.000Z",
       completed_at: "2026-03-29T12:00:00.000Z",
+      run_id: "001",
       progress: { total: 5, completed: 5, skipped: 0, current_step: "", percentage: 100 },
-      children: [],
       outputs: ["/path/to/output.txt"],
       steps: [],
-      timing: { elapsed_minutes: 660 },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: { status: "passed", criteria: [], verified_at: "2026-03-29T12:00:00.000Z", verified_by: "agent-1" },
       revisions: [],
       ...statusData,
     };
 
-    writeFileSync(join(taskDir, "status.yaml"), YAML.stringify(data), "utf-8");
-    return taskDir;
+    writeFileSync(join(runDir, "status.yaml"), YAML.stringify(data), "utf-8");
+    return runDir;
   }
 
   function parseResult(raw: string): any {
@@ -55,9 +58,9 @@ describe("executeTaskArchive", () => {
   }
 
   it("should return plan without writing files in dry_run mode", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
     const result = await executeTaskArchive("t-1", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
       dry_run: true,
     });
@@ -75,16 +78,17 @@ describe("executeTaskArchive", () => {
   });
 
   it("should create history and lessons files on full archive", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
     const result = await executeTaskArchive("t-2", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
     const data = parseResult(result.content[0].text);
 
     expect(data.success).toBe(true);
     expect(data.dry_run).toBe(false);
-    expect(data.results).toHaveLength(2);
+    // history + lessons + optional spec extraction
+    expect(data.results.length).toBeGreaterThanOrEqual(2);
 
     // 验证历史文件
     const historyFile = join(tmpDir, "memory", "task-history", "2026-03-29", "test-task.md");
@@ -92,6 +96,7 @@ describe("executeTaskArchive", () => {
     const historyContent = readFileSync(historyFile, "utf-8");
     expect(historyContent).toContain("test-task");
     expect(historyContent).toContain("completed");
+    // First result should be history creation
     expect(data.results[0].status).toBe("created");
 
     // 验证经验教训文件
@@ -99,11 +104,12 @@ describe("executeTaskArchive", () => {
     expect(existsSync(lessonsFile)).toBe(true);
     const lessonsContent = readFileSync(lessonsFile, "utf-8");
     expect(lessonsContent).toContain("Lessons");
+    // Second result should be lessons creation
     expect(data.results[1].status).toBe("created");
   });
 
   it("should skip history file if it already exists", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
 
     // 预先创建历史文件
     const historyDir = join(tmpDir, "memory", "task-history", "2026-03-29");
@@ -111,7 +117,7 @@ describe("executeTaskArchive", () => {
     writeFileSync(join(historyDir, "test-task.md"), "existing content\n", "utf-8");
 
     const result = await executeTaskArchive("t-3", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
     const data = parseResult(result.content[0].text);
@@ -125,7 +131,7 @@ describe("executeTaskArchive", () => {
   });
 
   it("should append to existing lessons file", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
 
     // 预先创建 lessons 文件
     const lessonsDir = join(tmpDir, "memory", "task-lessons");
@@ -133,7 +139,7 @@ describe("executeTaskArchive", () => {
     writeFileSync(join(lessonsDir, "test-task.md"), "Previous lessons.\n", "utf-8");
 
     const result = await executeTaskArchive("t-4", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
     const data = parseResult(result.content[0].text);
@@ -150,15 +156,15 @@ describe("executeTaskArchive", () => {
 
   it("should allow archiving non-terminal status tasks", async () => {
     // 非终态（running）也应该能归档
-    const taskDir = createTask({ status: "running" });
+    const runDir = createTask({ status: "running" });
     const result = await executeTaskArchive("t-5", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
     const data = parseResult(result.content[0].text);
 
     expect(data.success).toBe(true);
-    expect(data.results.length).toBe(2);
+    expect(data.results.length).toBeGreaterThanOrEqual(2);
     expect(data.results[0].status).toBe("created");
 
     const historyFile = join(tmpDir, "memory", "task-history", "2026-03-29", "test-task.md");
@@ -178,14 +184,14 @@ describe("executeTaskArchive", () => {
   });
 
   it("should include task details in history content", async () => {
-    const taskDir = createTask({
+    const runDir = createTask({
       assigned_to: "agent-special",
       outputs: ["/out/report.html", "/out/data.json"],
       progress: { total: 10, completed: 8, skipped: 0, current_step: "9.1", percentage: 80 },
     });
 
     await executeTaskArchive("t-7", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
 
@@ -201,7 +207,7 @@ describe("executeTaskArchive", () => {
   });
 
   it("should include errors in history content", async () => {
-    const taskDir = createTask({
+    const runDir = createTask({
       status: "failed",
       errors: [
         { step: "build", message: "TypeScript compilation error", retry_count: 3, timestamp: "2026-03-29T10:00:00.000Z" },
@@ -209,7 +215,7 @@ describe("executeTaskArchive", () => {
     });
 
     await executeTaskArchive("t-8", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
 
@@ -223,11 +229,11 @@ describe("executeTaskArchive", () => {
   });
 
   it("should use agent_workspace parameter for output path", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
     const customWorkspace = join(tmpDir, "my-workspace");
 
     await executeTaskArchive("t-9", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: customWorkspace,
     });
 
@@ -239,26 +245,26 @@ describe("executeTaskArchive", () => {
   });
 
   it("should default agent_workspace to cwd when not provided", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
 
     // 不传 agent_workspace，默认 cwd
     const result = await executeTaskArchive("t-10", {
-      task_dir: taskDir,
+      task_dir: runDir,
       project_root: tmpDir,
     });
     const data = parseResult(result.content[0].text);
 
     expect(data.success).toBe(true);
     // cwd 下应该创建了文件（cwd 可能和 tmpDir 不同，但操作不应报错）
-    expect(data.results.length).toBe(2);
+    expect(data.results.length).toBeGreaterThanOrEqual(2);
   });
 
   it("should use (no brief) when brief.md does not exist", async () => {
-    const taskDir = createTask();
+    const runDir = createTask();
     // 不创建 brief.md
 
     await executeTaskArchive("t-11", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
 
@@ -270,10 +276,10 @@ describe("executeTaskArchive", () => {
   });
 
   it("should generate lessons file without errors section when no errors", async () => {
-    const taskDir = createTask({ errors: [], blocked_by: [] });
+    const runDir = createTask({ errors: [], blocked_by: [] });
 
     await executeTaskArchive("t-12", {
-      task_dir: taskDir,
+      task_dir: runDir,
       agent_workspace: tmpDir,
     });
 
@@ -285,5 +291,40 @@ describe("executeTaskArchive", () => {
     // 没有 errors 时不应包含 "Errors Encountered"
     expect(content).not.toContain("Errors Encountered");
     expect(content).not.toContain("Blockers");
+  });
+
+  it("should auto-extract spec.md during archive", async () => {
+    const runDir = createTask({
+      steps: [
+        {
+          id: "1.1",
+          summary: { title: "Setup", content: "Created config", approach: "Used tsc init", sources: ["https://example.com"] },
+          status: "completed",
+          completed_at: "2026-03-29T01:00:00.000Z",
+          tags: [],
+        },
+      ],
+    });
+
+    const result = await executeTaskArchive("t-13", {
+      task_dir: runDir,
+      agent_workspace: tmpDir,
+    });
+    const data = parseResult(result.content[0].text);
+
+    expect(data.success).toBe(true);
+
+    // spec.md should have been created in task root
+    const specPath = join(tmpDir, "test-task", "spec.md");
+    expect(existsSync(specPath)).toBe(true);
+    const specContent = readFileSync(specPath, "utf-8");
+    expect(specContent).toContain("# Spec: Test Task");
+    expect(specContent).toContain("## Technical Decisions");
+    expect(specContent).toContain("Used tsc init");
+
+    // Should appear in results
+    const specAction = data.results.find((r: any) => r.file.includes("spec.md"));
+    expect(specAction).toBeDefined();
+    expect(specAction.status).toBe("created");
   });
 });

@@ -25,13 +25,11 @@ describe("RevisionBuilder", () => {
       assigned_to: "agent",
       started_at: null,
       completed_at: null,
+      run_id: "001",
       progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
       revisions: [],
@@ -56,10 +54,8 @@ describe("RevisionBuilder", () => {
     it("should return max_id + 1 for existing revisions", () => {
       const data = emptyData({
         revisions: [
-          { id: 1, type: "created", timestamp: "", trigger: "", summary: "",
-            block_type: null, block_reason: null },
-          { id: 3, type: "created", timestamp: "", trigger: "", summary: "",
-            block_type: null, block_reason: null },
+          { id: 1, type: "created", timestamp: "", trigger: "", summary: "" },
+          { id: 3, type: "created", timestamp: "", trigger: "", summary: "" },
         ] as Revision[],
       });
       expect(rb.nextId(data)).toBe(4);
@@ -68,8 +64,7 @@ describe("RevisionBuilder", () => {
     it("should return max_id + 1 for single revision", () => {
       const data = emptyData({
         revisions: [
-          { id: 5, type: "created", timestamp: "", trigger: "", summary: "",
-            block_type: null, block_reason: null },
+          { id: 5, type: "created", timestamp: "", trigger: "", summary: "" },
         ] as Revision[],
       });
       expect(rb.nextId(data)).toBe(6);
@@ -89,8 +84,7 @@ describe("RevisionBuilder", () => {
     it("should auto-increment id based on existing revisions", () => {
       const data = emptyData({
         revisions: [
-          { id: 1, type: "created", timestamp: "", trigger: "", summary: "",
-            block_type: null, block_reason: null },
+          { id: 1, type: "created", timestamp: "", trigger: "", summary: "" },
         ] as Revision[],
       });
       const rev = rb.build({ data, type: "status_change" });
@@ -119,25 +113,4 @@ describe("RevisionBuilder", () => {
     });
   });
 
-  // ====================================================================
-  // build — block 相关
-  // ====================================================================
-  describe("build — block info", () => {
-    it("should include block_type when provided", () => {
-      const rev = rb.build({
-        data: emptyData({ status: "running" }),
-        type: "status_change",
-        blockType: "soft_block",
-        blockReason: "waiting for review",
-      });
-      expect(rev.block_type).toBe("soft_block");
-      expect(rev.block_reason).toBe("waiting for review");
-    });
-
-    it("should not include block_type when not provided", () => {
-      const rev = rb.build({ data: emptyData(), type: "created" });
-      expect(rev.block_type).toBeNull();
-      expect(rev.block_reason).toBeNull();
-    });
   });
-});

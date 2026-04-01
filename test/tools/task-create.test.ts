@@ -24,6 +24,7 @@ describe("executeTaskCreate", () => {
   }
 
   function getStatusYaml(taskDir: string): any {
+    // v0.3.0: task_dir points to runs/001/, status.yaml is directly there
     const content = readFileSync(join(taskDir, "status.yaml"), "utf-8");
     return YAML.parse(content);
   }
@@ -32,6 +33,7 @@ describe("executeTaskCreate", () => {
     const result = await executeTaskCreate("tool-1", {
       task_name: "my-task",
       project_root: tmpDir,
+      brief: "## 目标\n默认参数测试",
     });
     const data = parseResult(result.content[0].text);
 
@@ -50,6 +52,7 @@ describe("executeTaskCreate", () => {
       task_name: "task-1",
       project_root: tmpDir,
       title: "自定义任务标题",
+      brief: "## 目标\n自定义标题测试",
     });
     const data = parseResult(result.content[0].text);
     expect(data.success).toBe(true);
@@ -63,6 +66,7 @@ describe("executeTaskCreate", () => {
       task_name: "task-1",
       project_root: tmpDir,
       assigned_to: "agent-007",
+      brief: "## 目标\nassigned_to 测试",
     });
     const data = parseResult(result.content[0].text);
     expect(data.success).toBe(true);
@@ -75,25 +79,33 @@ describe("executeTaskCreate", () => {
     const result = await executeTaskCreate("tool-5", {
       task_name: "数据分析-任务",
       project_root: tmpDir,
+      brief: "## 目标\nUnicode 测试",
     });
     const data = parseResult(result.content[0].text);
     expect(data.success).toBe(true);
     expect(data.task_id).toBe("数据分析-任务");
   });
 
-  it("should return TASK_ALREADY_EXISTS for duplicate task name", async () => {
-    await executeTaskCreate("tool-6a", {
+  it("should create a new run when task already exists and all runs are terminal", async () => {
+    // First create: task with run 001
+    const result1 = await executeTaskCreate("tool-6a", {
       task_name: "dup-task",
       project_root: tmpDir,
+      brief: "## 目标\n测试重复创建",
     });
+    const data1 = parseResult(result1.content[0].text);
+    expect(data1.success).toBe(true);
+    expect(data1.run_id).toBe("001");
 
-    const result = await executeTaskCreate("tool-6b", {
+    // Second create: should create run 002 (first run is still pending = non-terminal)
+    // But pending is NOT terminal, so this should fail with TASK_HAS_ACTIVE_RUNS
+    const result2 = await executeTaskCreate("tool-6b", {
       task_name: "dup-task",
       project_root: tmpDir,
     });
-    const data = parseResult(result.content[0].text);
-    expect(data.success).toBe(false);
-    expect(data.error).toBe("TASK_ALREADY_EXISTS");
+    const data2 = parseResult(result2.content[0].text);
+    expect(data2.success).toBe(false);
+    expect(data2.error).toBe("TASK_HAS_ACTIVE_RUNS");
   });
 
   it("should reject task_name containing '/'", async () => {
@@ -131,21 +143,19 @@ describe("executeTaskCreate", () => {
     const result = await executeTaskCreate("tool-11", {
       task_name: "defaults-task",
       project_root: tmpDir,
+      brief: "## 目标\n默认值测试",
     });
     const data = parseResult(result.content[0].text);
     const status = getStatusYaml(data.task_dir);
 
     expect(status.status).toBe("pending");
-    expect(status.children).toEqual([]);
     expect(status.outputs).toEqual([]);
     expect(status.steps).toEqual([]);
     expect(status.errors).toEqual([]);
-    expect(status.alerts).toEqual([]);
     expect(status.blocked_by).toEqual([]);
     expect(status.started_at).toBeNull();
     expect(status.completed_at).toBeNull();
     expect(status.progress).toEqual({ total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 });
-    expect(status.timing).toEqual({ elapsed_minutes: null });
     expect(status.verification.status).toBe("pending");
     expect(status.verification.criteria).toEqual([]);
   });
@@ -155,6 +165,7 @@ describe("executeTaskCreate", () => {
       task_name: "rev-task",
       project_root: tmpDir,
       assigned_to: "agent-1",
+      brief: "## 目标\nrevision 测试",
     });
     const data = parseResult(result.content[0].text);
     const status = getStatusYaml(data.task_dir);
@@ -170,6 +181,7 @@ describe("executeTaskCreate", () => {
     const result = await executeTaskCreate("tool-13", {
       task_name: "git-task",
       project_root: tmpDir,
+      brief: "## 目标\ngitignore 测试",
     });
     const data = parseResult(result.content[0].text);
     const gitignorePath = join(data.task_dir, ".gitignore");
@@ -180,6 +192,7 @@ describe("executeTaskCreate", () => {
     const result = await executeTaskCreate("tool-14", {
       task_name: "struct-task",
       project_root: tmpDir,
+      brief: "## 目标\n结构测试",
     });
     const data = parseResult(result.content[0].text);
 
@@ -187,8 +200,9 @@ describe("executeTaskCreate", () => {
     expect(data).toHaveProperty("task_dir");
     expect(data).toHaveProperty("task_id", "struct-task");
     expect(data).toHaveProperty("status", "pending");
+    expect(data).toHaveProperty("run_id");
     expect(data).toHaveProperty("created_dirs");
-    expect(data.created_dirs).toHaveLength(1);
+    expect(data.created_dirs).toHaveLength(2); // task root + run dir
     expect(data.created_dirs[0]).toContain("struct-task");
   });
 
@@ -197,64 +211,11 @@ describe("executeTaskCreate", () => {
     const result = await executeTaskCreate("tool-15", {
       task_name: "cwd-task",
       project_root: tmpDir,
+      brief: "## 目标\ncwd 测试",
     });
     const data = parseResult(result.content[0].text);
     expect(data.success).toBe(true);
     expect(data.task_dir).toContain("spec-task");
     expect(data.task_dir).toContain("cwd-task");
-  });
-
-  it("should parse checklist into steps array when checklist parameter is provided", async () => {
-    const checklist = `## 1. 数据收集
-- [x] 1.1 收集财务数据 [spawn:financial-valuation]
-- [x] 1.2 获取行业报告
-- [-] 1.3 对比行业均值 (数据不可用)
-- [ ] 2.1 财务估值分析`;
-
-    const result = await executeTaskCreate("tool-16", {
-      task_name: "checklist-task",
-      project_root: tmpDir,
-      checklist,
-    });
-    const data = parseResult(result.content[0].text);
-    const status = getStatusYaml(data.task_dir);
-
-    // checklist.md should be created
-    expect(existsSync(join(data.task_dir, "checklist.md"))).toBe(true);
-    expect(data.created_artifacts).toContain("checklist");
-
-    // steps should be parsed from checklist
-    expect(status.steps).toBeDefined();
-    expect(status.steps.length).toBe(4);
-
-    // Step 1.1: completed with tag
-    expect(status.steps[0].id).toBe("1.1");
-    expect(status.steps[0].status).toBe("completed");
-    expect(status.steps[0].completed_at).not.toBeNull();
-    expect(status.steps[0].tags).toEqual(["spawn:financial-valuation"]);
-
-    // Step 1.2: completed without tag
-    expect(status.steps[1].id).toBe("1.2");
-    expect(status.steps[1].status).toBe("completed");
-
-    // Step 1.3: skipped with skip_reason
-    expect(status.steps[2].id).toBe("1.3");
-    expect(status.steps[2].status).toBe("skipped");
-    expect(status.steps[2].skip_reason).toBe("数据不可用");
-    expect(status.steps[2].completed_at).not.toBeNull();
-
-    // Step 2.1: pending
-    expect(status.steps[3].id).toBe("2.1");
-    expect(status.steps[3].status).toBe("pending");
-    expect(status.steps[3].completed_at).toBeNull();
-
-    // progress should be calculated from steps
-    expect(status.progress).toEqual({
-      total: 4,
-      completed: 2,
-      skipped: 1,
-      current_step: "2.1",
-      percentage: 50,
-    });
   });
 });

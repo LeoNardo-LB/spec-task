@@ -30,6 +30,7 @@ async function createSimpleTask(projectRoot: string, taskName: string): Promise<
     project_root: projectRoot,
     title: `Test: ${taskName}`,
     assigned_to: "agent",
+    brief: `## 目标\nBoundary test for ${taskName}`,
   });
   const data = parseResponse(result);
   expect(data.success).toBe(true);
@@ -52,13 +53,11 @@ function createFakeTaskDir(tmpDir: string, taskName: string, overrides: Partial<
     assigned_to: "agent",
     started_at: null,
     completed_at: null,
+    run_id: "001",
     progress: { total: 0, completed: 0, skipped: 0, current_step: "", percentage: 0 },
-    children: [],
     outputs: [],
     steps: [],
-    timing: { elapsed_minutes: null },
     errors: [],
-    alerts: [],
     blocked_by: [],
     verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
     revisions: [],
@@ -66,7 +65,6 @@ function createFakeTaskDir(tmpDir: string, taskName: string, overrides: Partial<
   };
 
   writeFileSync(join(taskDir, "status.yaml"), YAML.stringify(data), "utf-8");
-  writeFileSync(join(taskDir, "checklist.md"), "- [ ] 1.1 Step\n", "utf-8");
   return taskDir;
 }
 
@@ -138,16 +136,18 @@ describe("Boundary: Invalid Inputs", () => {
     expect(data.error).toBe("INVALID_PARAMS");
   });
 
-  it("task_create duplicate should return TASK_ALREADY_EXISTS", async () => {
+  it("task_create duplicate should return TASK_HAS_ACTIVE_RUNS", async () => {
     await createSimpleTask(tmpDir, "dup-boundary");
 
     const result = await executeTaskCreate("b-3", {
       task_name: "dup-boundary",
       project_root: tmpDir,
+      brief: "## 目标\n重复创建测试",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(false);
-    expect(data.error).toBe("TASK_ALREADY_EXISTS");
+    // First run is still pending (non-terminal), so TASK_HAS_ACTIVE_RUNS
+    expect(data.error).toBe("TASK_HAS_ACTIVE_RUNS");
   });
 
   it("task_transition on nonexistent task should return TASK_NOT_FOUND", async () => {
@@ -448,15 +448,8 @@ progress:
   completed: 0
   current_step: ''
   percentage: 0
-parent: null
-depth: 0
-children: []
 outputs: []
-timing:
-  estimated_minutes: null
-  elapsed_minutes: null
 errors: []
-alerts: []
 blocked_by: []
 verification:
   status: pending
@@ -496,6 +489,7 @@ describe("Boundary: Special Characters", () => {
       task_name: "测试任务",
       project_root: tmpDir,
       title: "中文任务标题验证",
+      brief: "## 目标\n中文名称验证",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(true);
@@ -513,6 +507,7 @@ describe("Boundary: Special Characters", () => {
       task_name: "my task with spaces",
       project_root: tmpDir,
       title: "Spaces in Name",
+      brief: "## 目标\n空格名称验证",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(true);
@@ -530,6 +525,7 @@ describe("Boundary: Special Characters", () => {
       task_name: "feature-api-v2",
       project_root: tmpDir,
       title: "API v2 开发 🚀",
+      brief: "## 目标\nEmoji 验证",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(true);
@@ -593,6 +589,7 @@ describe("Boundary: Special Characters", () => {
     const result = await executeTaskCreate("b-16", {
       task_name: longName,
       project_root: tmpDir,
+      brief: "## 目标\n长名称验证",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(true);
@@ -603,6 +600,7 @@ describe("Boundary: Special Characters", () => {
     const result = await executeTaskCreate("b-17", {
       task_name: "my-feature-branch-task-123",
       project_root: tmpDir,
+      brief: "## 目标\nKebab-case 名称验证",
     });
     const data = parseResponse(result);
     expect(data.success).toBe(true);

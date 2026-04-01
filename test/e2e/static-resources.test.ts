@@ -2,8 +2,8 @@
  * Static Resources E2E Tests for spec-task plugin.
  *
  * Verifies the existence and integrity of all static resources shipped with the plugin:
- *   - 4 Template files (brief.md, spec.md, plan.md, checklist.md)
- *   - 2 Reference docs (status-format.md, openspec-mapping.md)
+ *   - 3 Template files (brief.md, spec.md, plan.md)
+ *   - 1 Reference doc (openspec-mapping.md)
  *   - Built-in default config (config.yaml)
  *   - SKILL.md with trigger conditions
  *   - Plugin manifest (openclaw.plugin.json)
@@ -72,15 +72,6 @@ describe("Static Resources: Template Files", () => {
     expect(content, "plan.md should contain 'Strategy' section").toContain("Strategy");
     expect(content, "plan.md should contain 'Tools Required' section").toContain("Tools Required");
   });
-
-  it("checklist.md should exist and contain step checklist template", async () => {
-    const filePath = join(templatesDir, "checklist.md");
-    await expectFileExists(filePath);
-
-    const content = await readContent(filePath);
-    expect(content, "checklist.md should contain 'Checklist' heading").toContain("Checklist");
-    expect(content, "checklist.md should contain checkbox format '- [ ]'").toContain("- [ ]");
-  });
 });
 
 // ============================================================================
@@ -89,17 +80,6 @@ describe("Static Resources: Template Files", () => {
 
 describe("Static Resources: Reference Docs", () => {
   const referenceDir = join(PLUGIN_ROOT, "skills/spec-task/reference");
-
-  it("status-format.md should exist and document status.yaml field structure", async () => {
-    const filePath = join(referenceDir, "status-format.md");
-    await expectFileExists(filePath);
-
-    const content = await readContent(filePath);
-    expect(content, "status-format.md should reference 'status.yaml'").toContain("status.yaml");
-    expect(content, "status-format.md should contain field definitions").toContain("task_id");
-    expect(content, "status-format.md should contain progress fields").toContain("progress");
-    expect(content, "status-format.md should contain verification fields").toContain("verification");
-  });
 
   it("openspec-mapping.md should exist and contain OpenSpec mapping content", async () => {
     const filePath = join(referenceDir, "openspec-mapping.md");
@@ -140,39 +120,11 @@ describe("Static Resources: Built-in Default Config", () => {
 });
 
 // ============================================================================
-// Suite 4: SKILL.md
+// Suite 4: SKILL.md — REMOVED
 // ============================================================================
-
-describe("Static Resources: SKILL.md", () => {
-  it("SKILL.md should exist", async () => {
-    const filePath = join(PLUGIN_ROOT, "skills/spec-task/SKILL.md");
-    await expectFileExists(filePath);
-  });
-
-  it("SKILL.md should contain 'spec-task' in its content", async () => {
-    const filePath = join(PLUGIN_ROOT, "skills/spec-task/SKILL.md");
-    const content = await readContent(filePath);
-    expect(content, "SKILL.md should contain 'spec-task'").toContain("spec-task");
-  });
-
-  it("SKILL.md should mention at least 3 of 4 trigger conditions", async () => {
-    const filePath = join(PLUGIN_ROOT, "skills/spec-task/SKILL.md");
-    const content = await readContent(filePath);
-
-    const triggers = [
-      { keyword: "coordinator", label: "coordinator 派发" },
-      { keyword: "≥3", label: "≥3 步复杂任务" },
-      { keyword: "spec-task/", label: "spec-task 目录已存在" },
-      { keyword: "显式要求", label: "用户显式要求" },
-    ];
-
-    const matchedTriggers = triggers.filter(t => content.includes(t.keyword));
-    expect(
-      matchedTriggers.length,
-      `SKILL.md should mention at least 3 trigger conditions, found: ${matchedTriggers.map(t => t.label).join(", ")}`
-    ).toBeGreaterThanOrEqual(3);
-  });
-});
+// SKILL.md was removed in hook-based-skill-injection change.
+// All its content is now injected via before_prompt_build hook.
+// The skills/ directory still contains schemas/ and config.yaml which are required.
 
 // ============================================================================
 // Suite 5: Plugin Manifest
@@ -201,13 +153,13 @@ describe("Static Resources: Plugin Manifest (openclaw.plugin.json)", () => {
     expect(manifest.configSchema.properties.enforceOnSubAgents.type).toBe("boolean");
   });
 
-  it("openclaw.plugin.json should list skills: [\"skills/spec-task\"]", async () => {
+  it("openclaw.plugin.json should NOT list skills (SKILL.md removed; content injected via hook)", async () => {
     const filePath = join(PLUGIN_ROOT, "openclaw.plugin.json");
     const content = await readContent(filePath);
     const manifest = JSON.parse(content);
 
-    expect(manifest.skills, "Plugin manifest should have skills array").toBeDefined();
-    expect(manifest.skills).toContain("skills/spec-task");
+    // skills array was removed in hook-based-skill-injection change
+    expect(manifest.skills, "Plugin manifest should not have skills array").toBeUndefined();
   });
 });
 

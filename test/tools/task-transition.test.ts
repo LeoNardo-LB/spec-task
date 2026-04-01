@@ -20,7 +20,7 @@ describe("executeTaskTransition", () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  function createTaskWithStatus(status: TaskStatus, overrides: Partial<TaskStatusData> = {}): string {
+  function createTaskWithStatus(status: TaskStatus, overrides: Partial<TaskStatusData> = {}, configYaml?: string): string {
     const taskDir = join(tmpDir, "test-task");
     mkdirSync(taskDir, { recursive: true });
 
@@ -33,13 +33,11 @@ describe("executeTaskTransition", () => {
       assigned_to: "agent",
       started_at: null,
       completed_at: null,
+      run_id: "001",
       progress: { total: 5, completed: 2, skipped: 0, current_step: "3.1", percentage: 40 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
       revisions: [],
@@ -51,6 +49,12 @@ describe("executeTaskTransition", () => {
       "- [x] 1.1 Done\n- [x] 1.2 Done\n- [ ] 2.1 Todo\n- [ ] 2.2 Todo\n- [ ] 2.3 Todo\n",
       "utf-8"
     );
+    if (configYaml) {
+      writeFileSync(join(taskDir, "config.yaml"), configYaml, "utf-8");
+    } else {
+      // 默认 requires_verification: false，避免现有状态机测试被 verification 兜底拦截
+      writeFileSync(join(taskDir, "config.yaml"), "completion:\n  requires_verification: false\n", "utf-8");
+    }
 
     return taskDir;
   }
@@ -124,6 +128,8 @@ describe("executeTaskTransition", () => {
 
       expect(data.success).toBe(false);
       expect(data.error).toBe("INVALID_TRANSITION");
+      // 验证错误消息包含合法转换路径
+      expect(data.message).toContain("Allowed transitions from");
 
       const content = readFileSync(join(taskDir, "status.yaml"), "utf-8");
       const status = YAML.parse(content);
@@ -181,5 +187,76 @@ describe("executeTaskTransition", () => {
     const data = parseResult(result.content[0].text);
     expect(data.success).toBe(false);
     expect(data.error).toBe("TASK_NOT_FOUND");
+  });
+
+  // ════════════════════════════════════════════════════════════════
+  // Verification 兜底校验测试（Chunk 3）
+  // ════════════════════════════════════════════════════════════════
+
+  describe("verification fallback guard (task_transition internal)", () => {
+    it("should block running→completed when verification is pending (requires_verification=true)", async () => {
+      const taskDir = createTaskWithStatus(
+        "running",
+        { verification: { status: "pending", criteria: [{ criterion: "c1", result: "failed", evidence: "", reason: "" }], verified_at: null, verified_by: null } },
+        "completion:\n  requires_verification: true\n",
+      );
+      const result = await executeTaskTransition("t-v1", { task_dir: taskDir, status: "completed" });
+      const data = parseResult(result.content[0].text);
+
+      expect(data.success).toBe(false);
+      expect(data.error).toBe("INTERNAL_ERROR");
+      expect(data.message).toContain("Cannot complete task");
+      expect(data.message).toContain("verification status is 'pending'");
+      expect(data.message).toContain("task_verify");
+
+      // status.yaml 不应被修改
+      const content = readFileSync(join(taskDir, "status.yaml"), "utf-8");
+      const status = YAML.parse(content);
+      expect(status.status).toBe("running");
+    });
+
+    it("should allow running→completed when verification is passed (requires_verification=true)", async () => {
+      const taskDir = createTaskWithStatus(
+        "running",
+        { verification: { status: "passed", criteria: [{ criterion: "c1", result: "passed", evidence: "ok", reason: "" }], verified_at: "2026-03-29T12:00:00.000Z", verified_by: "test" } },
+        "completion:\n  requires_verification: true\n",
+      );
+      const result = await executeTaskTransition("t-v2", { task_dir: taskDir, status: "completed" });
+      const data = parseResult(result.content[0].text);
+
+      expect(data.success).toBe(true);
+      expect(data.old_status).toBe("running");
+      expect(data.new_status).toBe("completed");
+
+      const content = readFileSync(join(taskDir, "status.yaml"), "utf-8");
+      const status = YAML.parse(content);
+      expect(status.status).toBe("completed");
+    });
+
+    it("should allow running→completed when verification is pending but requires_verification=false", async () => {
+      const taskDir = createTaskWithStatus(
+        "running",
+        { verification: { status: "pending", criteria: [], verified_at: null, verified_by: null } },
+        "completion:\n  requires_verification: false\n",
+      );
+      const result = await executeTaskTransition("t-v3", { task_dir: taskDir, status: "completed" });
+      const data = parseResult(result.content[0].text);
+
+      expect(data.success).toBe(true);
+      expect(data.new_status).toBe("completed");
+    });
+
+    it("should NOT check verification for non-completed transitions", async () => {
+      const taskDir = createTaskWithStatus(
+        "running",
+        { verification: { status: "pending", criteria: [], verified_at: null, verified_by: null } },
+        "completion:\n  requires_verification: true\n",
+      );
+      const result = await executeTaskTransition("t-v4", { task_dir: taskDir, status: "failed" });
+      const data = parseResult(result.content[0].text);
+
+      expect(data.success).toBe(true);
+      expect(data.new_status).toBe("failed");
+    });
   });
 });

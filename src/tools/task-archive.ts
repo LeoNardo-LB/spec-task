@@ -5,6 +5,7 @@ import { SPEC_TASK_ERRORS } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { FileUtils } from "../file-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
+import { extractSpec } from "../core/spec-extractor.js";
 
 export const TaskArchiveParamsSchema = {
   type: "object",
@@ -26,10 +27,11 @@ interface ArchiveAction {
 
 /**
  * 读取 brief.md 文件内容（用于归档标题）。
+ * 直接从 taskRoot 读取，支持 v0.3.0 和 v1.0 格式。
  */
-async function readBrief(taskDir: string): Promise<string> {
+async function readBriefIfExists(taskRoot: string): Promise<string> {
   try {
-    const content = await readFile(join(taskDir, "brief.md"), "utf-8");
+    const content = await readFile(join(taskRoot, "brief.md"), "utf-8");
     return content.trim().split("\n")[0] ?? "";
   } catch {
     return "";
@@ -145,8 +147,19 @@ export async function executeTaskArchive(
     );
   }
 
-  const taskName = basename(task_dir);
-  const brief = await readBrief(task_dir);
+  // Resolve task name: support both v0.3.0 (runs/001/) and v1.0 (direct task dir) formats
+  let taskName: string;
+  let taskRoot: string;
+  if (task_dir.includes("runs")) {
+    // v0.3.0 format: task_dir = .../spec-task/{name}/runs/001/
+    taskRoot = join(task_dir, "..", "..");
+    taskName = basename(taskRoot);
+  } else {
+    // v1.0 format: task_dir = .../spec-task/{name}/
+    taskRoot = task_dir;
+    taskName = basename(taskRoot);
+  }
+  const brief = await readBriefIfExists(taskRoot);
   const date = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
   // 历史文件路径
@@ -193,6 +206,14 @@ export async function executeTaskArchive(
     await writeFile(lessonsFile, lessonsContent, "utf-8");
     actions.push({ action: "create", file: lessonsFile, status: "created" });
   }
+
+  // Auto-extract spec from run data
+  try {
+    const specPath = await extractSpec({ taskDir: task_dir, runDir: task_dir });
+    if (specPath) {
+      actions.push({ action: "create", file: specPath, status: "created" });
+    }
+  } catch { /* Spec extraction failure should not block archiving */ }
 
   return formatResult({
     success: true,

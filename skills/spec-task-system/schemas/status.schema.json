@@ -1,0 +1,326 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://openclaw.ai/schemas/spec-task/status.schema.json",
+  "title": "Spec-Task Status",
+  "description": "spec-task 任务状态文件（status.yaml）的 JSON Schema。存放于 <task-root>/runs/<run-id>/status.yaml，由 task_create 创建，task_transition/steps_update/task_log 等工具维护。",
+  "type": "object",
+  "required": ["task_id", "title", "created", "updated", "status", "assigned_to", "run_id", "progress", "steps", "errors", "blocked_by", "verification", "revisions"],
+  "additionalProperties": false,
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "description": "任务唯一标识（UUID v4）。",
+      "examples": ["a1b2c3d4-e5f6-7890-abcd-ef1234567890"]
+    },
+    "title": {
+      "type": "string",
+      "description": "任务标题。",
+      "examples": ["实现 SchemaReader 核心模块"]
+    },
+    "created": {
+      "type": "string",
+      "format": "date-time",
+      "description": "任务创建时间（ISO 8601）。",
+      "examples": ["2026-04-01T02:00:00.000Z"]
+    },
+    "updated": {
+      "type": "string",
+      "format": "date-time",
+      "description": "最后更新时间（ISO 8601）。",
+      "examples": ["2026-04-01T02:30:00.000Z"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "assigned", "running", "completed", "failed", "blocked", "cancelled", "revised"],
+      "description": "任务当前状态。合法转换见 VALID_TRANSITIONS：pending→assigned, assigned→running, running→completed|failed|blocked|cancelled|revised, failed→running, blocked→pending, revised→running|pending, completed/failed/cancelled→终态。",
+      "default": "pending"
+    },
+    "assigned_to": {
+      "type": "string",
+      "description": "任务分配给谁（agent ID 或角色名）。",
+      "default": ""
+    },
+    "run_id": {
+      "type": "string",
+      "description": "运行编号（零填充三位，如 001、002）。",
+      "pattern": "^\\d{3}$",
+      "default": "001"
+    },
+    "started_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "任务开始执行时间（转为 running 时记录）。null 表示未开始。",
+      "default": null
+    },
+    "completed_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "任务完成时间（转为终态时记录）。null 表示未完成。",
+      "default": null
+    },
+    "progress": {
+      "type": "object",
+      "description": "进度统计（由 steps 自动计算，不建议手动编辑）。",
+      "required": ["total", "completed", "skipped", "current_step", "percentage"],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "type": "integer",
+          "description": "步骤总数。",
+          "default": 0,
+          "minimum": 0
+        },
+        "completed": {
+          "type": "integer",
+          "description": "已完成步骤数。",
+          "default": 0,
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "description": "已跳过步骤数。",
+          "default": 0,
+          "minimum": 0
+        },
+        "current_step": {
+          "type": "string",
+          "description": "当前正在执行的步骤 ID。",
+          "default": ""
+        },
+        "percentage": {
+          "type": "integer",
+          "description": "完成百分比（0-100）。",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 100
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "任务产出物路径列表（由 task_log action=output 记录）。",
+      "default": []
+    },
+    "steps": {
+      "type": "array",
+      "description": "结构化步骤列表（由 steps_update 全量替换）。每步包含自包含的执行上下文。",
+      "items": {
+        "type": "object",
+        "required": ["id", "summary", "status", "completed_at", "tags"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "步骤编号（如 1.1、2.3），用于排序和引用。",
+            "pattern": "^\\d+\\.\\d+$"
+          },
+          "summary": {
+            "type": "object",
+            "description": "步骤摘要信息（自包含，执行者无需翻阅 brief/plan 即可理解）。",
+            "required": ["title", "content", "approach", "sources"],
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "步骤标题（动宾结构 + 具体对象）。",
+                "examples": ["在 run-utils.ts 中实现 getNextRunId() 目录编号分配"]
+              },
+              "content": {
+                "type": "string",
+                "description": "步骤内容：① 做什么（目标）② 关键参数/输入 ③ 实现思路概述 ④ 验证方式。",
+                "examples": ["在 src/core/ 新建 run-utils.ts，实现 getNextRunId() 扫描 runs/ 子目录获取下一个递增编号。"]
+              },
+              "approach": {
+                "type": "string",
+                "description": "实施方式：具体技术策略（工具/库/算法选择）。",
+                "examples": ["fs.readdir 扫描 → 过滤 /\\d{3}/ → Math.max(...) + 1 → padStart(3, '0')"]
+              },
+              "sources": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "来源引用：引用 brief.md/plan.md 的对应章节。格式：文件名.md#标题文本。",
+                "default": [],
+                "examples": [["brief.md#Scope", "plan.md#Steps Overview"]]
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": ["pending", "completed", "skipped"],
+            "description": "步骤状态。pending=待执行，completed=已完成，skipped=已跳过（需 skip_reason）。",
+            "default": "pending"
+          },
+          "completed_at": {
+            "type": ["string", "null"],
+            "format": "date-time",
+            "description": "步骤完成时间。null 表示未完成。",
+            "default": null
+          },
+          "tags": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "步骤标签（用于分类和过滤）。",
+            "default": []
+          },
+          "skip_reason": {
+            "type": "string",
+            "description": "跳过原因（仅 status=skipped 时填写）。"
+          }
+        }
+      },
+      "default": []
+    },
+    "errors": {
+      "type": "array",
+      "description": "错误记录列表（由 task_log action=error 记录）。",
+      "items": {
+        "type": "object",
+        "required": ["step", "message", "retry_count", "timestamp"],
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "type": "string",
+            "description": "出错的步骤 ID。"
+          },
+          "message": {
+            "type": "string",
+            "description": "错误描述信息。"
+          },
+          "retry_count": {
+            "type": "integer",
+            "description": "已重试次数。",
+            "default": 0,
+            "minimum": 0
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "错误发生时间。"
+          }
+        }
+      },
+      "default": []
+    },
+    "blocked_by": {
+      "type": "array",
+      "description": "阻塞记录列表（由 task_log action=add-block 记录）。",
+      "items": {
+        "type": "object",
+        "required": ["task", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "task": {
+            "type": "string",
+            "description": "阻塞来源任务名。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "阻塞原因。"
+          }
+        }
+      },
+      "default": []
+    },
+    "verification": {
+      "type": "object",
+      "description": "验收状态（由 task_verify 工具管理）。",
+      "required": ["status", "criteria"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["pending", "passed", "failed"],
+          "description": "验收状态。",
+          "default": "pending"
+        },
+        "criteria": {
+          "type": "array",
+          "description": "验收标准列表。",
+          "items": {
+            "type": "object",
+            "required": ["criterion", "result", "evidence", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "criterion": {
+                "type": "string",
+                "description": "验收标准描述。"
+              },
+              "result": {
+                "type": "string",
+                "enum": ["passed", "failed"],
+                "description": "该标准的验收结果。"
+              },
+              "evidence": {
+                "type": "string",
+                "description": "验收证据（如测试输出、文件路径）。"
+              },
+              "reason": {
+                "type": "string",
+                "description": "通过/失败的详细原因。"
+              }
+            }
+          },
+          "default": []
+        },
+        "verified_at": {
+          "type": ["string", "null"],
+          "format": "date-time",
+          "description": "验收完成时间。null 表示未验收。",
+          "default": null
+        },
+        "verified_by": {
+          "type": ["string", "null"],
+          "description": "验收执行者（agent ID 或用户名）。",
+          "default": null
+        }
+      }
+    },
+    "revisions": {
+      "type": "array",
+      "description": "修订历史记录（每次状态变更自动追加）。",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "timestamp", "trigger", "summary"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "修订序号（递增）。",
+            "minimum": 1
+          },
+          "type": {
+            "type": "string",
+            "enum": ["created", "user_request", "auto_adapt", "verify_retry", "cancel", "status_change"],
+            "description": "修订类型。"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "description": "修订时间。"
+          },
+          "trigger": {
+            "type": "string",
+            "description": "触发修订的操作名（如 task_create、task_transition）。"
+          },
+          "summary": {
+            "type": "string",
+            "description": "修订摘要（人可读的变更说明）。"
+          },
+          "block_type": {
+            "type": ["string", "null"],
+            "enum": ["soft_block", "hard_block"],
+            "description": "关联的阻塞类型（仅阻塞相关修订有值）。"
+          },
+          "block_reason": {
+            "type": ["string", "null"],
+            "description": "阻塞原因（仅阻塞相关修订有值）。"
+          }
+        }
+      },
+      "default": []
+    }
+  }
+}

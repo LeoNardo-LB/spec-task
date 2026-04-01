@@ -25,6 +25,7 @@ import { executeTaskCreate } from "../../src/tools/task-create.js";
 import { executeTaskTransition } from "../../src/tools/task-transition.js";
 import { executeTaskLog } from "../../src/tools/task-log.js";
 import { executeTaskVerify } from "../../src/tools/task-verify.js";
+import { executeStepsUpdate } from "../../src/tools/steps-update.js";
 import { executeTaskResume } from "../../src/tools/task-resume.js";
 import { executeTaskArchive } from "../../src/tools/task-archive.js";
 import { executeConfigMerge } from "../../src/tools/config-merge.js";
@@ -64,10 +65,12 @@ describe("E2E Real Tools: Core Lifecycle", () => {
       project_root: env.projectRoot,
       title: "Full Lifecycle Test",
       assigned_to: "agent-1",
+      brief: "## 目标\n全生命周期端到端测试",
     });
     expect(createResult.success).toBe(true);
     expect(createResult.status).toBe("pending");
     expect(createResult.task_id).toBe("lifecycle-full");
+    expect(createResult.run_id).toBe("001");
     const taskDir: string = createResult.task_dir;
 
     // Verify task dir structure
@@ -99,14 +102,10 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(runningResult.success).toBe(true);
     expect(runningResult.new_status).toBe("running");
 
-    // Step 4: Write checklist (all items checked)
-    await writeFile(
-      join(taskDir, "checklist.md"),
-      "- [x] 1.1 Setup environment\n- [x] 1.2 Implement feature\n- [x] 1.3 Run tests\n- [x] 1.4 Verify output\n",
-      "utf-8",
-    );
+    // Step 4: No checklist in v0.3.0 — progress comes from steps in status.yaml
 
-    // Step 5: Transition to completed
+    // Step 5: Transition to completed (requires_verification: false for E2E lifecycle test)
+    await writeFile(join(taskDir, "config.yaml"), "completion:\n  requires_verification: false\n", "utf-8");
     const completedResult = await callAndParse(executeTaskTransition, "test-id", {
       task_dir: taskDir,
       status: "completed",
@@ -115,7 +114,7 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     });
     expect(completedResult.success).toBe(true);
     expect(completedResult.new_status).toBe("completed");
-    // Progress calculated from steps (checklist.md exists but no steps in status.yaml → all zeros)
+    // Progress calculated from steps (no steps in status.yaml → all zeros)
     expect(completedResult.progress.total).toBe(0);
     expect(completedResult.progress.completed).toBe(0);
 
@@ -125,8 +124,6 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(status.completed_at).not.toBeNull();
     expect(status.completed_at).not.toBe("");
     expect(status.started_at).not.toBeNull();
-    expect(typeof status.timing.elapsed_minutes).toBe("number");
-    expect(status.timing.elapsed_minutes).toBeGreaterThanOrEqual(0);
     // Progress calculated from steps (no steps in status.yaml → all zeros)
 
     // Verify revision trail: created → assigned → running → completed
@@ -142,6 +139,7 @@ describe("E2E Real Tools: Core Lifecycle", () => {
       task_name: "subdir-check",
       project_root: env.projectRoot,
       title: "Subdir Check",
+      brief: "## 目标\n子目录检查测试",
     });
     expect(createResult.success).toBe(true);
     const taskDir: string = createResult.task_dir;
@@ -153,12 +151,9 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(() => stat(join(taskDir, "outputs"))).rejects.toThrow();
     expect(() => stat(join(taskDir, "subtasks"))).rejects.toThrow();
     expect(() => stat(join(taskDir, ".gitignore"))).rejects.toThrow();
-
-    // Verify status.yaml is valid YAML with expected fields
-    const { readFile } = await import("fs/promises");
-    const statusContent = await readFile(join(taskDir, "status.yaml"), "utf-8");
-    expect(statusContent).toContain("task_id: subdir-check");
-    expect(statusContent).toContain("status: pending");
+    // v0.3.0: task_dir points to runs/001/
+    expect(taskDir).toContain("runs");
+    expect(taskDir).toContain("001");
   });
 
   it("3. task_transition state machine enforcement: pending → running should fail", async () => {
@@ -166,6 +161,7 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "state-machine-test",
       project_root: env.projectRoot,
+      brief: "## 目标\n状态机测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -189,6 +185,7 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "running-skip-rev",
       project_root: env.projectRoot,
+      brief: "## 目标\n运行跳过修订测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -226,6 +223,7 @@ describe("E2E Real Tools: Core Lifecycle", () => {
       task_name: "verify-autocomplete",
       project_root: env.projectRoot,
       assigned_to: "agent-1",
+      brief: "## 目标\n验证自动完成测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -252,6 +250,14 @@ describe("E2E Real Tools: Core Lifecycle", () => {
     expect(crit2.success).toBe(true);
     expect(crit2.total_criteria).toBe(2);
     expect(crit2.passed).toBe(2);
+
+    // Add completed steps so auto-complete can pass steps validation
+    await callAndParse(executeStepsUpdate, "test-id", {
+      task_dir: taskDir,
+      steps: [
+        { id: "1.1", summary: { title: "Step 1", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+      ],
+    });
 
     // Finalize → should auto-complete since all criteria passed + status is "running"
     const finalizeResult = await callAndParse(executeTaskVerify, "test-id", {
@@ -291,6 +297,7 @@ describe("E2E Real Tools: task_log", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "log-test-task",
       project_root: env.projectRoot,
+      brief: "## 目标\n日志测试任务",
     });
     taskDir = createResult.task_dir;
     await callAndParse(executeTaskTransition, "test-id", {
@@ -488,21 +495,6 @@ describe("E2E Real Tools: task_log", () => {
     expect(dupResult.success).toBe(false);
     expect(dupResult.error).toBe("DUPLICATE_OUTPUT");
   });
-
-  it("task_log alert: log alert and verify in status", async () => {
-    const result = await callAndParse(executeTaskLog, "test-id", {
-      task_dir: taskDir,
-      action: { action: "alert", type: "warning", message: "Memory usage high" },
-    });
-    expect(result.success).toBe(true);
-    expect(result.action).toBe("alert");
-    expect(result.type).toBe("warning");
-
-    const status = await readStatus(taskDir);
-    expect(status.alerts).toHaveLength(1);
-    expect(status.alerts[0].type).toBe("warning");
-    expect(status.alerts[0].message).toBe("Memory usage high");
-  });
 });
 
 // ============================================================================
@@ -518,6 +510,7 @@ describe("E2E Real Tools: task_resume", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "resume-pending",
       project_root: env.projectRoot,
+      brief: "## 目标\n恢复待分配测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -535,6 +528,7 @@ describe("E2E Real Tools: task_resume", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "resume-error",
       project_root: env.projectRoot,
+      brief: "## 目标\n恢复错误测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -568,6 +562,7 @@ describe("E2E Real Tools: task_resume", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "resume-blocked",
       project_root: env.projectRoot,
+      brief: "## 目标\n恢复阻塞测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -589,8 +584,6 @@ describe("E2E Real Tools: task_resume", () => {
     await callAndParse(executeTaskTransition, "test-id", {
       task_dir: taskDir,
       status: "blocked",
-      block_type: "hard_block",
-      block_reason: "Waiting for dep-task-alpha",
     });
 
     // Resume should show the blocker
@@ -607,6 +600,7 @@ describe("E2E Real Tools: task_resume", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "resume-revised",
       project_root: env.projectRoot,
+      brief: "## 目标\n恢复修订测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -641,6 +635,7 @@ describe("E2E Real Tools: task_resume", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "resume-completed",
       project_root: env.projectRoot,
+      brief: "## 目标\n恢复完成测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -651,6 +646,8 @@ describe("E2E Real Tools: task_resume", () => {
     await callAndParse(executeTaskTransition, "test-id", {
       task_dir: taskDir, status: "running",
     });
+    // Set requires_verification: false for E2E test (verification guard is tested separately)
+    await writeFile(join(taskDir, "config.yaml"), "completion:\n  requires_verification: false\n", "utf-8");
     await callAndParse(executeTaskTransition, "test-id", {
       task_dir: taskDir, status: "completed",
     });
@@ -668,6 +665,7 @@ describe("E2E Real Tools: task_resume", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "resume-cancelled",
       project_root: env.projectRoot,
+      brief: "## 目标\n恢复取消测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -702,6 +700,7 @@ describe("E2E Real Tools: task_archive", () => {
       task_name: taskName,
       project_root: env.projectRoot,
       assigned_to: "archive-agent",
+      brief: `## 目标\n${taskName}`,
     });
     const taskDir: string = createResult.task_dir;
 
@@ -712,14 +711,10 @@ describe("E2E Real Tools: task_archive", () => {
       task_dir: taskDir, status: "running",
     });
 
-    // Write checklist (all checked) for progress
-    await writeFile(
-      join(taskDir, "checklist.md"),
-      "- [x] 1.1 Step one\n- [x] 1.2 Step two\n",
-      "utf-8",
-    );
+    // v0.3.0: progress comes from steps, not checklist.md
 
-    // Complete via transition
+    // Complete via transition (requires_verification: false for E2E helper)
+    await writeFile(join(taskDir, "config.yaml"), "completion:\n  requires_verification: false\n", "utf-8");
     await callAndParse(executeTaskTransition, "test-id", {
       task_dir: taskDir, status: "completed",
     });
@@ -773,8 +768,9 @@ describe("E2E Real Tools: task_archive", () => {
   it("17. task_archive real: creates history and lessons files", async () => {
     const taskDir = await createCompletedTask("archive-real");
 
-    // Write a brief.md — first line becomes the archive title (readBrief reads line[0])
-    await writeFile(join(taskDir, "brief.md"), "Implement Auth Module\n\nJWT authentication with refresh tokens.", "utf-8");
+    // Write a brief.md to task root (not run dir) — first line becomes the archive title
+    const taskRoot = join(taskDir, "..", "..");
+    await writeFile(join(taskRoot, "brief.md"), "Implement Auth Module\n\nJWT authentication with refresh tokens.", "utf-8");
 
     const result = await callAndParse(executeTaskArchive, "test-id", {
       task_dir: taskDir,
@@ -784,7 +780,8 @@ describe("E2E Real Tools: task_archive", () => {
     });
     expect(result.success).toBe(true);
     expect(result.dry_run).toBe(false);
-    expect(result.results).toHaveLength(2);
+    // Archive creates: history file + lessons file + possibly spec extraction
+    expect(result.results.length).toBeGreaterThanOrEqual(2);
 
     // Both files should be created (not appended since first time)
     const historyAction = result.results.find((r: any) => r.action === "create");
@@ -1005,6 +1002,7 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "verify-get-test",
       project_root: env.projectRoot,
+      brief: "## 目标\n验证获取测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -1023,6 +1021,7 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "verify-no-criteria",
       project_root: env.projectRoot,
+      brief: "## 目标\n无标准验证测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -1038,6 +1037,7 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "verify-failed",
       project_root: env.projectRoot,
+      brief: "## 目标\n验证失败测试",
     });
     const taskDir: string = createResult.task_dir;
 
@@ -1073,14 +1073,17 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
     await callAndParse(executeTaskCreate, "test-id", {
       task_name: "duplicate-task",
       project_root: env.projectRoot,
+      brief: "## 目标\n重复任务测试",
     });
 
     const dupResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "duplicate-task",
       project_root: env.projectRoot,
+      brief: "## 目标\n重复任务测试",
     });
     expect(dupResult.success).toBe(false);
-    expect(dupResult.error).toBe("TASK_ALREADY_EXISTS");
+    // First run is still pending (non-terminal), so TASK_HAS_ACTIVE_RUNS
+    expect(dupResult.error).toBe("TASK_HAS_ACTIVE_RUNS");
   });
 
   it("task_create with invalid task_name returns error", async () => {
@@ -1099,12 +1102,134 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
     expect(emptyResult.error).toBe("INVALID_PARAMS");
   });
 
+  // ════════════════════════════════════════════════════════════════
+  // task_verify suggested_criteria (功能 A)
+  // ════════════════════════════════════════════════════════════════
+
+  describe("task_verify suggested_criteria", () => {
+    it("add-criterion returns suggested_criteria for uncovered steps", async () => {
+      // 创建任务并设置 3 个 steps
+      const createResult = await callAndParse(executeTaskCreate, "test-id", {
+        task_name: "suggest-add",
+        project_root: env.projectRoot,
+        brief: "## 目标\n建议测试",
+      });
+      const taskDir: string = createResult.task_dir;
+
+      await callAndParse(executeStepsUpdate, "test-id", {
+        task_dir: taskDir,
+        steps: [
+          { id: "1.1", summary: { title: "实现登录", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+          { id: "1.2", summary: { title: "实现注册", content: "", approach: "", sources: [] }, status: "pending", completed_at: null, tags: [] },
+          { id: "2.1", summary: { title: "实现注销", content: "", approach: "", sources: [] }, status: "pending", completed_at: null, tags: [] },
+        ],
+      });
+
+      // 添加 1 个 criterion，覆盖步骤 1.1
+      const result = await callAndParse(executeTaskVerify, "test-id", {
+        task_dir: taskDir,
+        action: { action: "add-criterion", criterion: "验证步骤 1.1: 实现登录", result: "passed" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.suggested_criteria).toBeDefined();
+      expect(result.suggested_criteria).toHaveLength(2);
+      // 应包含 1.2 和 2.1 的建议
+      const suggestionTexts = result.suggested_criteria.join(" ");
+      expect(suggestionTexts).toContain("1.2");
+      expect(suggestionTexts).toContain("2.1");
+    });
+
+    it("add-criterion returns no suggestions when all covered", async () => {
+      const createResult = await callAndParse(executeTaskCreate, "test-id", {
+        task_name: "suggest-all-covered",
+        project_root: env.projectRoot,
+        brief: "## 目标\n全覆盖测试",
+      });
+      const taskDir: string = createResult.task_dir;
+
+      await callAndParse(executeStepsUpdate, "test-id", {
+        task_dir: taskDir,
+        steps: [
+          { id: "1.1", summary: { title: "功能A", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+          { id: "1.2", summary: { title: "功能B", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+          { id: "2.1", summary: { title: "功能C", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+        ],
+      });
+
+      // 添加 3 个 criteria 全覆盖
+      await callAndParse(executeTaskVerify, "test-id", {
+        task_dir: taskDir,
+        action: { action: "add-criterion", criterion: "验证步骤 1.1: 功能A", result: "passed" },
+      });
+      await callAndParse(executeTaskVerify, "test-id", {
+        task_dir: taskDir,
+        action: { action: "add-criterion", criterion: "验证步骤 1.2: 功能B", result: "passed" },
+      });
+
+      const result = await callAndParse(executeTaskVerify, "test-id", {
+        task_dir: taskDir,
+        action: { action: "add-criterion", criterion: "验证步骤 2.1: 功能C", result: "passed" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.suggested_criteria).toBeUndefined();
+    });
+
+    it("get returns suggested_criteria", async () => {
+      const createResult = await callAndParse(executeTaskCreate, "test-id", {
+        task_name: "suggest-get",
+        project_root: env.projectRoot,
+        brief: "## 目标\nget 建议测试",
+      });
+      const taskDir: string = createResult.task_dir;
+
+      await callAndParse(executeStepsUpdate, "test-id", {
+        task_dir: taskDir,
+        steps: [
+          { id: "1.1", summary: { title: "实现登录", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+          { id: "1.2", summary: { title: "实现注册", content: "", approach: "", sources: [] }, status: "pending", completed_at: null, tags: [] },
+          { id: "2.1", summary: { title: "实现注销", content: "", approach: "", sources: [] }, status: "pending", completed_at: null, tags: [] },
+        ],
+      });
+
+      // get 时 0 criteria → 3 条建议
+      const result = await callAndParse(executeTaskVerify, "test-id", {
+        task_dir: taskDir,
+        action: { action: "get" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.suggested_criteria).toBeDefined();
+      expect(result.suggested_criteria).toHaveLength(3);
+    });
+
+    it("get returns no suggestions when steps empty", async () => {
+      const createResult = await callAndParse(executeTaskCreate, "test-id", {
+        task_name: "suggest-empty-steps",
+        project_root: env.projectRoot,
+        brief: "## 目标\n空步骤测试",
+      });
+      const taskDir: string = createResult.task_dir;
+
+      // 0 steps, 0 criteria
+      const result = await callAndParse(executeTaskVerify, "test-id", {
+        task_dir: taskDir,
+        action: { action: "get" },
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.suggested_criteria).toBeUndefined();
+    });
+  });
+
   it("full flow: create → assign → run → error → retry → verify → complete → archive → recall", async () => {
     // 1. Create
     const createResult = await callAndParse(executeTaskCreate, "test-id", {
       task_name: "integration-flow",
       project_root: env.projectRoot,
       assigned_to: "full-flow-agent",
+      brief: "## 目标\n集成流程全链路测试",
     });
     expect(createResult.success).toBe(true);
     const taskDir: string = createResult.task_dir;
@@ -1135,6 +1260,14 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
       action: { action: "add-criterion", criterion: "Setup works", result: "passed" },
     });
 
+    // 5.5 Add completed steps so auto-complete can pass steps validation
+    await callAndParse(executeStepsUpdate, "test-id", {
+      task_dir: taskDir,
+      steps: [
+        { id: "1.1", summary: { title: "Step 1", content: "", approach: "", sources: [] }, status: "completed", completed_at: new Date().toISOString(), tags: [] },
+      ],
+    });
+
     // 6. Finalize → auto-complete
     const finalizeResult = await callAndParse(executeTaskVerify, "test-id", {
       task_dir: taskDir,
@@ -1149,8 +1282,9 @@ describe("E2E Real Tools: Cross-tool Integration", () => {
     expect(status.errors[0].retry_count).toBe(1);
     expect(status.verification.status).toBe("passed");
 
-    // 8. Write brief for archive
-    await writeFile(join(taskDir, "brief.md"), "# Integration Flow\n\nFull pipeline test", "utf-8");
+    // 8. Write brief for archive (brief.md is at task root, resolve from run dir)
+    const taskRoot = join(taskDir, "..", "..");
+    await writeFile(join(taskRoot, "brief.md"), "# Integration Flow\n\nFull pipeline test", "utf-8");
 
     // 9. Archive
     const archiveResult = await callAndParse(executeTaskArchive, "test-id", {

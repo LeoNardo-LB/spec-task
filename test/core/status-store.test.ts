@@ -53,13 +53,11 @@ describe("StatusStore", () => {
       assigned_to: "agent-1",
       started_at: null,
       completed_at: null,
+      run_id: "001",
       progress: { total: 5, completed: 0, skipped: 0, current_step: "1.1", percentage: 0 },
-      children: [],
       outputs: [],
       steps: [],
-      timing: { elapsed_minutes: null },
       errors: [],
-      alerts: [],
       blocked_by: [],
       verification: { status: "pending", criteria: [], verified_at: null, verified_by: null },
       revisions: [],
@@ -374,11 +372,6 @@ describe("StatusStore", () => {
         retry_count: 3,
         timestamp: "2026-03-29T10:05:00.000Z",
       });
-      data.alerts.push({
-        type: "warning",
-        message: "approaching deadline",
-        timestamp: "2026-03-29T10:06:00.000Z",
-      });
       data.blocked_by.push({ task: "parent-task", reason: "dependency" });
       data.verification.criteria.push({
         criterion: "tests pass",
@@ -393,7 +386,6 @@ describe("StatusStore", () => {
       expect(loaded.progress.percentage).toBe(42.5);
       expect(loaded.errors).toHaveLength(1);
       expect(loaded.errors[0].step).toBe("2.1");
-      expect(loaded.alerts).toHaveLength(1);
       expect(loaded.blocked_by).toHaveLength(1);
       expect(loaded.verification.criteria).toHaveLength(1);
     });
@@ -461,8 +453,6 @@ describe("StatusStore", () => {
           timestamp: new Date().toISOString(),
           trigger: "test",
           summary: "status changed to running",
-          block_type: null,
-          block_reason: null,
         });
         return data;
       });
@@ -655,7 +645,6 @@ revisions: []
       expect(loaded.status).toBe("pending");
       expect(loaded.progress.total).toBe(10);
       expect(loaded.progress.percentage).toBe(0);
-      expect((loaded.timing as unknown as Record<string, unknown>).estimated_minutes).toBe(60);
       expect(loaded.started_at).toBeNull();
       expect(loaded.revisions).toHaveLength(0);
     });
@@ -679,7 +668,7 @@ revisions: []
       expect(parsed.progress.total).toBe(5);
       expect(parsed.revisions).toEqual([]);
       expect(parsed.started_at).toBeNull();
-      expect(parsed.children).toEqual([]);
+      expect(parsed.revisions).toEqual([]);
     });
 
     // ------------------------------------------------------------------
@@ -694,8 +683,6 @@ revisions: []
           timestamp: new Date().toISOString(),
           trigger: "test",
           summary: `revision ${i}`,
-          block_type: null,
-          block_reason: null,
         });
       }
       writeYaml(statusPath(), data);
@@ -723,8 +710,6 @@ revisions: []
           timestamp: new Date().toISOString(),
           trigger: "test",
           summary: `revision ${i}`,
-          block_type: null,
-          block_reason: null,
         });
       }
 

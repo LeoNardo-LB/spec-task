@@ -3,7 +3,7 @@ import { SPEC_TASK_ERRORS } from "../types.js";
 import { StatusStore } from "../core/status-store.js";
 import { StateMachine } from "../core/state-machine.js";
 import { RevisionBuilder } from "../core/revision.js";
-import { calculateProgressFromSteps } from "../core/checklist-utils.js";
+import { calculateProgressFromSteps, validateStepsForCompletion, suggestVerificationCriteria } from "../core/steps-utils.js";
 import { formatResult, formatError, type ToolResponse } from "../tool-utils.js";
 
 export const TaskVerifyParamsSchema = {
@@ -47,7 +47,15 @@ export async function executeTaskVerify(
   if (action.action === "get") {
     try {
       const data = await store.loadStatus(task_dir);
-      return formatResult({ success: true, verification: data.verification });
+      const suggestions = suggestVerificationCriteria(
+        data.steps ?? [],
+        data.verification.criteria,
+      );
+      return formatResult({
+        success: true,
+        verification: data.verification,
+        suggested_criteria: suggestions.length > 0 ? suggestions : undefined,
+      });
     } catch {
       return formatError(
         SPEC_TASK_ERRORS.TASK_NOT_FOUND,
@@ -101,6 +109,10 @@ export async function executeTaskVerify(
         const totalCriteria = data.verification.criteria.length;
         const passed = data.verification.criteria.filter((c) => c.result === "passed").length;
         const failed = data.verification.criteria.filter((c) => c.result === "failed").length;
+        const suggestions = suggestVerificationCriteria(
+          data.steps ?? [],
+          data.verification.criteria,
+        );
         return {
           success: true,
           action: "add-criterion",
@@ -109,6 +121,7 @@ export async function executeTaskVerify(
           total_criteria: totalCriteria,
           passed,
           failed,
+          suggested_criteria: suggestions.length > 0 ? suggestions : undefined,
         };
       });
       return formatResult(result);
@@ -142,19 +155,25 @@ export async function executeTaskVerify(
 
         // 全部通过 + running 状态 → 自动完成
         if (allPassed && data.status === "running") {
+          // Steps 完整性检查：未完成时不自动推进 status
+          const stepsValidation = validateStepsForCompletion(data.steps ?? []);
+          if (!stepsValidation.valid) {
+            // 验证通过但 steps 不完整，不自动推进 status，仅标记验证状态
+            return {
+              success: true,
+              action: "finalize",
+              verification_status: data.verification.status,
+              auto_completed: false,
+              auto_complete_skipped_reason: stepsValidation.reason,
+            };
+          }
+
           const sm = new StateMachine();
           const oldStatus = data.status;
           sm.validate(oldStatus, "completed");
 
           data.status = "completed";
           data.completed_at = new Date().toISOString();
-
-          // 自动计算 elapsed_minutes
-          if (data.started_at) {
-            const startMs = new Date(data.started_at).getTime();
-            const endMs = Date.now();
-            data.timing.elapsed_minutes = Math.round((endMs - startMs) / 60000);
-          }
 
           // 从 steps 计算进度
           data.progress = calculateProgressFromSteps(data.steps ?? []);
